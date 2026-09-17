@@ -1,0 +1,30 @@
+services:
+  ros1_stack:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ros1_amr_core
+    restart: unless-stopped
+    privileged: true
+    ipc: host
+    stdin_open: true
+    tty: true
+    ports:
+      # Port 10000 connects Unity ROS-TCP-Connector to ros_tcp_endpoint
+      - "10000:10000"
+      # Port 11311 is the ROS Master (roscore)
+      - "11311:11311"
+    volumes:
+      # Mount Catkin workspace from Windows P: drive so edits in VS Code reflect live
+      - ../catkin_ws:/catkin_ws
+      # GUI Passthrough for Windows 11 WSLg (RViz & rqt display natively)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /mnt/wslg:/mnt/wslg:rw
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY}
+      - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/mnt/wslg/runtime-dir}
+      - PULSE_SERVER=${PULSE_SERVER:-/mnt/wslg/PulseServer}
+      - ROS_IP=127.0.0.1
+      - ROS_MASTER_URI=http://127.0.0.1:11311
+    command: bash
