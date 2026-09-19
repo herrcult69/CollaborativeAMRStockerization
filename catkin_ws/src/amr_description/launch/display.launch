@@ -1,0 +1,14 @@
+<launch>
+  <!-- Load the URDF into the ROS Parameter Server -->
+  <param name="robot_description" textfile="$(find amr_description)/urdf/stacker_amr.urdf" />
+
+  <!-- Joint state publisher GUI to interactively test wheel & lift joints -->
+  <node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui" />
+
+  <!-- Robot state publisher to broadcast tf frames -->
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+
+  <!-- RViz for visualization -->
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find amr_description)/launch/display.rviz" required="false" />
+</launch>
+
