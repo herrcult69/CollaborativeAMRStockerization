@@ -1,0 +1,11 @@
+<launch>
+  <arg name="goal_x" default="2.0" />
+  <arg name="goal_y" default="0.0" />
+  <node pkg="amr_navigation" type="go_to_point.py" name="go_to_point" output="screen">
+    <param name="goal_x" value="$(arg goal_x)" />
+    <param name="goal_y" value="$(arg goal_y)" />
+    <param name="tolerance" value="0.2" />
+    <param name="max_linear" value="0.2" />
+    <param name="max_angular" value="0.5" />
+  </node>
+</launch>

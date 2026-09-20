@@ -1,0 +1,3 @@
+# Scripts executed in the Linux ROS container must retain LF line endings.
+*.py text eol=lf
+*.sh text eol=lf
