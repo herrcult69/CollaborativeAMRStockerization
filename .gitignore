@@ -65,3 +65,6 @@ qtcreator-*
 **/[Ll]ogs/
 **/[Uu]ser[Ss]ettings/
 **/MemoryCaptures/
+
+
+/catkin_ws/src/CMakeLists.txt
