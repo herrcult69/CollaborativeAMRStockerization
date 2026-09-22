@@ -1,0 +1,26 @@
+services:
+  ros1_stack:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ros1_amr_core
+    restart: unless-stopped
+    privileged: true
+    ipc: host
+    stdin_open: true
+    tty: true
+    ports:
+      # Port 10000 connects Unity ROS-TCP-Connector to ros_tcp_endpoint
+      - "10000:10000"
+      # Port 11311 is the ROS Master (roscore)
+      - "11311:11311"
+    volumes:
+      # Mount Catkin workspace live from host
+      - ../catkin_ws:/catkin_ws
+      # Native Linux X11 Socket for RViz & rqt display
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - ROS_IP=127.0.0.1
+      - ROS_MASTER_URI=http://127.0.0.1:11311
+    command: bash
