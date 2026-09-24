@@ -1,0 +1,19 @@
+<launch>
+  <!-- Lesson: fixed mounts from stacker_amr.urdf, for level planar motion.
+       Do not run alongside robot_state_publisher publishing these same edges.
+       odom -> base_footprint stays owned by Unity PlanarOdometryPublisher. -->
+  <arg name="publish_base_mount" default="true" />
+  <arg name="publish_laser_mount" default="true" />
+  <arg name="base_height" default="0.05" />
+  <arg name="laser_x" default="0.25" />
+  <arg name="laser_y" default="0.0" />
+  <arg name="laser_z" default="0.225" />
+
+  <!-- Arguments: x y z qx qy qz qw parent child (ROS axes, metres). -->
+  <node if="$(arg publish_base_mount)" pkg="tf2_ros" type="static_transform_publisher"
+        name="lesson_base_mount_tf"
+        args="0 0 $(arg base_height) 0 0 0 1 base_footprint base_link" />
+  <node if="$(arg publish_laser_mount)" pkg="tf2_ros" type="static_transform_publisher"
+        name="lesson_laser_mount_tf"
+        args="$(arg laser_x) $(arg laser_y) $(arg laser_z) 0 0 0 1 base_link laser_link" />
+</launch>
