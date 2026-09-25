@@ -1,0 +1,23 @@
+<launch>
+  <!-- Start after bridge, Unity scan/odom, and sensor TF are running.
+       Only SLAM owns map -> odom during mapping; do not run AMCL concurrently. -->
+  <param name="/use_sim_time" value="true" />
+  <node pkg="gmapping" type="slam_gmapping" name="slam_gmapping" output="screen">
+    <remap from="scan" to="/scan" />
+    <param name="base_frame" value="base_footprint" />
+    <param name="odom_frame" value="odom" />
+    <param name="map_frame" value="map" />
+    <param name="map_update_interval" value="1.0" />
+    <param name="delta" value="0.05" />
+    <param name="linearUpdate" value="0.2" />
+    <param name="angularUpdate" value="0.1" />
+    <param name="temporalUpdate" value="1.0" />
+    <!-- Sensor range_max is 10 m; keep no-return rays beyond usable hit range. -->
+    <param name="maxRange" value="10.01" />
+    <param name="maxUrange" value="9.8" />
+    <param name="xmin" value="-20.0" />
+    <param name="ymin" value="-20.0" />
+    <param name="xmax" value="20.0" />
+    <param name="ymax" value="20.0" />
+  </node>
+</launch>

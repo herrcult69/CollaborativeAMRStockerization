@@ -1,0 +1,30 @@
+<launch>
+  <!-- Run after stopping gmapping. Bridge, Unity publishers and mount TF
+       remain separate; this launch does not command robot motion. -->
+  <arg name="map_file" default="$(find amr_navigation)/maps/warehouse_training_01.yaml" />
+  <param name="/use_sim_time" value="true" />
+  <node pkg="map_server" type="map_server" name="map_server"
+        args="&quot;$(arg map_file)&quot;" output="screen">
+    <param name="frame_id" value="map" />
+  </node>
+  <node pkg="amcl" type="amcl" name="amcl" output="screen">
+    <remap from="scan" to="/scan" />
+    <param name="use_map_topic" value="true" />
+    <param name="global_frame_id" value="map" />
+    <param name="odom_frame_id" value="odom" />
+    <param name="base_frame_id" value="base_footprint" />
+    <param name="tf_broadcast" value="true" />
+    <param name="odom_model_type" value="diff" />
+    <param name="laser_model_type" value="likelihood_field" />
+    <param name="laser_max_beams" value="60" />
+    <param name="min_particles" value="500" />
+    <param name="max_particles" value="2000" />
+    <param name="update_min_d" value="0.1" />
+    <param name="update_min_a" value="0.1" />
+    <param name="resample_interval" value="1" />
+    <param name="transform_tolerance" value="0.2" />
+    <param name="gui_publish_rate" value="10.0" />
+    <!-- Set the initial estimate with RViz 2D Pose Estimate for each run.
+         Unity world coordinates are not coordinates in the saved map. -->
+  </node>
+</launch>
