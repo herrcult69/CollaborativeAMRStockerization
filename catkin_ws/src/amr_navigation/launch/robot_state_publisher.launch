@@ -1,0 +1,17 @@
+<launch>
+
+    <!-- Load the robot URDF into /robot_description -->
+    <param
+        name="robot_description"
+        textfile="$(find amr_description)/urdf/stacker_amr.urdf"
+    />
+
+    <!-- Publish TF from the URDF -->
+    <node
+        pkg="robot_state_publisher"
+        type="robot_state_publisher"
+        name="robot_state_publisher"
+        output="screen"
+    />
+
+</launch>
