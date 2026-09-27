@@ -1,0 +1,30 @@
+<launch>
+  <!-- Prerequisites: Unity, bridge, sensor TF, map_server + AMCL, initial pose.
+       Stop costmap_preview and go_to_point first. This launch drives /cmd_vel. -->
+  <param name="/use_sim_time" value="true" />
+  <!-- move_base's progress watchdog measures translation, not rotation.
+       Allow slow heading alignment: pi / 0.08 rad/s is about 39 seconds.
+       This is still a finite timeout, not a remedy for actual left/right wobble. -->
+  <arg name="oscillation_timeout" default="60.0" />
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <rosparam command="load" file="$(find amr_navigation)/config/costmap_common.yaml" ns="global_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/global_costmap.yaml" ns="global_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/costmap_common.yaml" ns="local_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/local_costmap.yaml" ns="local_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/dwa_warehouse.yaml" ns="DWAPlannerROS" />
+    <param name="base_global_planner" value="navfn/NavfnROS" />
+    <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" />
+    <param name="NavfnROS/allow_unknown" value="false" />
+    <param name="controller_frequency" value="10.0" />
+    <param name="planner_frequency" value="1.0" />
+    <param name="planner_patience" value="5.0" />
+    <param name="controller_patience" value="5.0" />
+    <param name="oscillation_timeout" value="$(arg oscillation_timeout)" />
+    <param name="oscillation_distance" value="0.10" />
+    <param name="shutdown_costmaps" value="false" />
+    <!-- Introduce recovery separately after basic goal following is validated. -->
+    <param name="recovery_behavior_enabled" value="false" />
+    <param name="clearing_rotation_allowed" value="false" />
+    <remap from="cmd_vel" to="/cmd_vel" />
+  </node>
+</launch>
