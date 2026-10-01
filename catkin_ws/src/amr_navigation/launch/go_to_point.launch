@@ -1,4 +1,5 @@
 <launch>
+  <param name="/use_sim_time" value="true" />
   <arg name="goal_x" default="2.0" />
   <arg name="goal_y" default="0.0" />
   <node pkg="amr_navigation" type="go_to_point.py" name="go_to_point" output="screen">

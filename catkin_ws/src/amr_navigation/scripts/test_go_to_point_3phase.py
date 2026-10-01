@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""
+Unit tests for the 3-Phase AMR Docking Controller algorithm.
+Tests state transitions, heading normalization, degree-to-radian conversion, and convergence.
+"""
+import math
+import unittest
+from go_to_point_3phase import normalize_angle, deg_to_rad, ThreePhaseDockingController
+
+
+class DummyNode:
+    """Mock for unit testing without roscore."""
+    pass
+
+
+class ThreePhaseControllerTests(unittest.TestCase):
+    def setUp(self):
+        # Create controller with default parameters for offline testing
+        self.ctrl = ThreePhaseDockingController.__new__(ThreePhaseDockingController)
+        self.ctrl.gx = 2.0
+        self.ctrl.gy = 0.0
+        self.ctrl.goal_yaw = 0.0
+        self.ctrl.pos_tolerance = 0.10
+        self.ctrl.yaw_tolerance = 0.05
+        self.ctrl.heading_align_threshold = 0.20
+        self.ctrl.max_linear = 0.25
+        self.ctrl.min_linear = 0.04
+        self.ctrl.max_angular = 0.6
+        self.ctrl.min_angular = 0.08
+        self.ctrl.wheel_offset_x = 0.0
+        self.ctrl.state = ThreePhaseDockingController.STATE_ALIGN_TO_GOAL
+
+    def test_angle_normalization(self):
+        self.assertAlmostEqual(normalize_angle(0.0), 0.0)
+        self.assertAlmostEqual(normalize_angle(3.0 * math.pi), math.pi, places=5)
+        self.assertAlmostEqual(normalize_angle(-3.0 * math.pi), -math.pi, places=5)
+        self.assertAlmostEqual(normalize_angle(math.pi / 2), math.pi / 2, places=5)
+
+    def test_deg_to_rad_conversion(self):
+        self.assertAlmostEqual(deg_to_rad(0.0), 0.0)
+        self.assertAlmostEqual(deg_to_rad(90.0), math.pi / 2, places=5)
+        self.assertAlmostEqual(deg_to_rad(-90.0), -math.pi / 2, places=5)
+        self.assertAlmostEqual(abs(deg_to_rad(180.0)), math.pi, places=5)
+        self.assertAlmostEqual(deg_to_rad(360.0), 0.0, places=5)
+
+    def test_phase1_in_place_rotation_when_facing_away(self):
+        # Robot is at (0, 0) facing +90 deg (pi/2). Goal is (2, 0) (requires facing 0 deg).
+        linear, angular, dist, active_err, yaw_err = self.ctrl.compute_step(0.0, 0.0, math.pi / 2)
+        # Should stay in Phase 1, linear speed must be 0, angular must turn clockwise (negative)
+        self.assertEqual(linear, 0.0)
+        self.assertLess(angular, 0.0)
+        self.assertEqual(self.ctrl.state, ThreePhaseDockingController.STATE_ALIGN_TO_GOAL)
+
+    def test_already_at_goal_transitions_to_phase3(self):
+        # Robot is ALREADY at (2.0, 0.0) within pos_tolerance.
+        # Should NOT spin in circles trying to face (2, 0); must skip directly to STATE_ALIGN_FINAL_YAW
+        self.ctrl.state = ThreePhaseDockingController.STATE_ALIGN_TO_GOAL
+        self.ctrl.goal_yaw = math.pi / 2
+        linear, angular, dist, active_err, yaw_err = self.ctrl.compute_step(2.0, 0.0, 0.0)
+        self.assertEqual(self.ctrl.state, ThreePhaseDockingController.STATE_ALIGN_FINAL_YAW)
+        self.assertEqual(linear, 0.0)
+        self.assertGreater(angular, 0.0)  # Should start aligning final yaw towards pi/2
+
+    def test_transition_to_phase2_when_heading_aligned(self):
+        # Heading error is within 0.20 rad
+        self.ctrl.compute_step(0.0, 0.0, 0.05)
+        self.assertEqual(self.ctrl.state, ThreePhaseDockingController.STATE_DRIVE_TO_GOAL)
+        # Next step should produce forward linear velocity
+        linear, angular, dist, active_err, yaw_err = self.ctrl.compute_step(0.0, 0.0, 0.05)
+        self.assertGreater(linear, 0.0)
+
+    def test_transition_to_phase3_and_docking_alignment(self):
+        # Move into Phase 2
+        self.ctrl.state = ThreePhaseDockingController.STATE_DRIVE_TO_GOAL
+        self.ctrl.goal_yaw = math.pi / 2  # Target docking orientation: 90 deg
+
+        # Place robot within pos_tolerance (e.g. at 1.95m from goal 2.0m)
+        self.ctrl.compute_step(1.95, 0.0, 0.0)
+        self.assertEqual(self.ctrl.state, ThreePhaseDockingController.STATE_ALIGN_FINAL_YAW)
+
+        # In Phase 3, linear velocity must be 0, angular velocity must align towards goal_yaw (pi/2)
+        linear, angular, dist, active_err, yaw_err = self.ctrl.compute_step(1.95, 0.0, 0.0)
+        self.assertEqual(linear, 0.0)
+        self.assertGreater(angular, 0.0)
+
+    def test_full_convergence_simulation(self):
+        # Simulate full trajectory from (0, 0, pi/4) to goal (2.0, 1.0) with docking yaw -pi/2
+        self.ctrl.gx = 2.0
+        self.ctrl.gy = 1.0
+        self.ctrl.goal_yaw = -math.pi / 2
+        self.ctrl.state = ThreePhaseDockingController.STATE_ALIGN_TO_GOAL
+
+        x, y, yaw = 0.0, 0.0, math.pi / 4
+        dt = 0.05  # 20 Hz simulation step
+
+        for step in range(3000):
+            linear, angular, dist, active_err, yaw_err = self.ctrl.compute_step(x, y, yaw)
+            if self.ctrl.state == ThreePhaseDockingController.STATE_ARRIVED:
+                break
+            x += linear * math.cos(yaw) * dt
+            y += linear * math.sin(yaw) * dt
+            yaw = normalize_angle(yaw + angular * dt)
+
+        self.assertEqual(self.ctrl.state, ThreePhaseDockingController.STATE_ARRIVED)
+        final_dist = math.hypot(self.ctrl.gx - x, self.ctrl.gy - y)
+        final_yaw_err = abs(normalize_angle(self.ctrl.goal_yaw - yaw))
+        self.assertLessEqual(final_dist, self.ctrl.pos_tolerance)
+        self.assertLessEqual(final_yaw_err, self.ctrl.yaw_tolerance)
+
+
+if __name__ == "__main__":
+    unittest.main()

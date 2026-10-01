@@ -32,6 +32,8 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
-catkin_install_python(PROGRAMS scripts/go_to_point.py
+catkin_install_python(PROGRAMS
+  scripts/go_to_point.py
+  scripts/go_to_point_3phase.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

@@ -15,7 +15,6 @@ class ControllerTests(unittest.TestCase):
         v, w, _ = self.command(0, 0, math.pi / 2)
         self.assertEqual(v, 0)
         self.assertLess(w, 0)
-
     def test_heading_wrap(self):
         v, w, _ = self.command(0, 0, math.pi - 0.01, -2, -0.02)
         self.assertGreater(v, 0)
