@@ -40,8 +40,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
-# Auto-source ROS in bashrc so every new terminal (docker exec) immediately has catkin_make
-RUN echo "source /opt/ros/noetic/setup.bash" >> /root/.bashrc
+# Auto-source ROS base and custom workspace in bashrc so every new terminal (docker exec) immediately has all packages
+RUN echo "source /opt/ros/noetic/setup.bash" >> /root/.bashrc && \
+    echo "if [ -f /catkin_ws/devel/setup.bash ]; then source /catkin_ws/devel/setup.bash; fi" >> /root/.bashrc
 
 # Set up environment entrypoint
 COPY entrypoint.sh /entrypoint.sh
