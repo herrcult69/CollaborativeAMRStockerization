@@ -14,6 +14,8 @@ find_package(catkin REQUIRED COMPONENTS
   teb_local_planner
 )
 
+catkin_python_setup()
+
 catkin_package(
   CATKIN_DEPENDS
     rospy
@@ -33,7 +35,8 @@ include_directories(
 )
 
 catkin_install_python(PROGRAMS
-  scripts/go_to_point.py
-  scripts/go_to_point_3phase.py
+  scripts/docking_node.py
+  scripts/lift_node.py
+  scripts/milestone1_mission.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

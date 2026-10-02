@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-Unit tests for the 3-Phase AMR Docking Controller algorithm.
-Tests state transitions, heading normalization, degree-to-radian conversion, and convergence.
+Unit tests for AMR Docking Controller algorithm.
+Tests state transitions, heading normalization, degree-to-radian conversion,
+and closed-loop trajectory convergence.
 """
 import math
+import os
+import sys
 import unittest
-from go_to_point_3phase import normalize_angle, deg_to_rad, ThreePhaseDockingController
 
+# Allow offline testing without sourcing ROS setup
+_pkg_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+if os.path.isdir(_pkg_src) and _pkg_src not in sys.path:
+    sys.path.insert(0, _pkg_src)
 
-class DummyNode:
-    """Mock for unit testing without roscore."""
-    pass
+from amr_navigation.docking import normalize_angle, deg_to_rad, ThreePhaseDockingController
 
 
 class ThreePhaseControllerTests(unittest.TestCase):
@@ -25,8 +29,8 @@ class ThreePhaseControllerTests(unittest.TestCase):
         self.ctrl.heading_align_threshold = 0.20
         self.ctrl.max_linear = 0.25
         self.ctrl.min_linear = 0.04
-        self.ctrl.max_angular = 0.6
-        self.ctrl.min_angular = 0.08
+        self.ctrl.max_angular = 0.65
+        self.ctrl.min_angular = 0.42
         self.ctrl.wheel_offset_x = 0.0
         self.ctrl.state = ThreePhaseDockingController.STATE_ALIGN_TO_GOAL
 
@@ -53,13 +57,13 @@ class ThreePhaseControllerTests(unittest.TestCase):
 
     def test_already_at_goal_transitions_to_phase3(self):
         # Robot is ALREADY at (2.0, 0.0) within pos_tolerance.
-        # Should NOT spin in circles trying to face (2, 0); must skip directly to STATE_ALIGN_FINAL_YAW
+        # Must skip directly to STATE_ALIGN_FINAL_YAW and start aligning
         self.ctrl.state = ThreePhaseDockingController.STATE_ALIGN_TO_GOAL
         self.ctrl.goal_yaw = math.pi / 2
         linear, angular, dist, active_err, yaw_err = self.ctrl.compute_step(2.0, 0.0, 0.0)
         self.assertEqual(self.ctrl.state, ThreePhaseDockingController.STATE_ALIGN_FINAL_YAW)
         self.assertEqual(linear, 0.0)
-        self.assertGreater(angular, 0.0)  # Should start aligning final yaw towards pi/2
+        self.assertGreater(angular, 0.0)
 
     def test_transition_to_phase2_when_heading_aligned(self):
         # Heading error is within 0.20 rad
