@@ -1,0 +1,53 @@
+<launch>
+  <param name="/use_sim_time" value="true" />
+
+  <!-- Mission Execution Mode: set true to skip rack pickup if AMR already carries pallet -->
+  <arg name="skip_pickup" default="false" />
+
+  <!-- Rack Pickup Parameters -->
+  <arg name="pallet_x" default="4.0" />
+  <arg name="pallet_y" default="5.0" />
+  <arg name="dock_yaw" default="270.0" />
+  <arg name="fork_offset" default="0.22" />
+
+  <!-- Orthogonal Corridor Transit Waypoints (Avoids Diagonal Blockage) -->
+  <arg name="corridor_x" default="4.0" />
+  <arg name="corridor_y" default="0.0" />
+
+  <!-- 25cm Tall Staging Station Delivery Parameters (Dock is at 13.0, 0.0) -->
+  <arg name="station_x" default="13.0" />
+  <arg name="station_y" default="0.0" />
+  <arg name="station_yaw" default="180.0" />
+
+  <!-- Standoff distance in front of dock stop pose (default: 0.8m -> stops at ~11.98m) -->
+  <arg name="standoff" default="0.8" />
+
+  <!-- Vertical Clearances (25cm Station Surface = 0.25m) -->
+  <!-- Transit: 0.28m gives pallet bottom 0.29m (40mm clearance over 0.25m station) -->
+  <!-- Deposit: 0.21m touches pallet down at 0.24m and sinks forks to 0.21m floating in cavity -->
+  <arg name="transit_lift_height" default="0.28" />
+  <arg name="deposit_lift_height" default="0.21" />
+
+  <!-- Speed Parameters -->
+  <arg name="dock_speed" default="0.12" />
+  <arg name="transit_speed" default="0.45" />
+
+  <!-- Pallet Undock Reverse Node -->
+  <node pkg="amr_navigation" type="test_undock_reverse.py" name="test_undock_reverse" output="screen">
+    <param name="skip_pickup" value="$(arg skip_pickup)" />
+    <param name="pallet_x" value="$(arg pallet_x)" />
+    <param name="pallet_y" value="$(arg pallet_y)" />
+    <param name="dock_yaw" value="$(arg dock_yaw)" />
+    <param name="fork_offset" value="$(arg fork_offset)" />
+    <param name="corridor_x" value="$(arg corridor_x)" />
+    <param name="corridor_y" value="$(arg corridor_y)" />
+    <param name="station_x" value="$(arg station_x)" />
+    <param name="station_y" value="$(arg station_y)" />
+    <param name="station_yaw" value="$(arg station_yaw)" />
+    <param name="standoff" value="$(arg standoff)" />
+    <param name="transit_lift_height" value="$(arg transit_lift_height)" />
+    <param name="deposit_lift_height" value="$(arg deposit_lift_height)" />
+    <param name="dock_speed" value="$(arg dock_speed)" />
+    <param name="transit_speed" value="$(arg transit_speed)" />
+  </node>
+</launch>
