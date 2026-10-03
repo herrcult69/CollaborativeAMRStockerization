@@ -5,21 +5,21 @@ Milestone 1 Mission Coordinator: Autonomous Pallet Stacker Workflow.
 Orchestrates multi-waypoint navigation and pallet lifting:
   1. Move to (4.0, 4.0), align to 270 deg (facing pick station), lift up to 0.35m
   2. Move to (4.0, 0.0) transit waypoint out of pick bay
-  3. Move to (13.0, 0.0), align to 180 deg (facing storage bay), set lift to 0.25m
+  3. Move to (12.8, 0.0), align to 180 deg (facing storage bay), set lift to 0.20m
   4. Move back to (12.0, 0.0) retreat transit waypoint
 """
 import rospy
-from amr_navigation.docking import ThreePhaseDockingController
+from amr_navigation.move_to_point import MoveToPointController
 from amr_navigation.lift import LiftController
 
 
 def run_mission():
     rospy.init_node("milestone1_mission")
 
-    # Gentle warehouse speeds (max_linear = 0.35 m/s, max_angular = 0.65 rad/s) 
-    controller = ThreePhaseDockingController(max_linear=0.75, max_angular=0.65) # Changed to 0.75 for faster
-    # Gentle hydraulic lift speed (0.06 m/s = 6 cm/s) to prevent physics shock
-    lift = LiftController(default_speed=0.1) # Change to 0.1 for faster
+    # Warehouse transit speeds (increased from 0.35 to 0.75 m/s for faster demo runs)
+    controller = MoveToPointController(max_linear=0.75, max_angular=0.65)
+    # Hydraulic lift speed (increased from 0.06 to 0.10 m/s for faster height transitions)
+    lift = LiftController(default_speed=0.1)
 
     rospy.loginfo("==================================================")
     rospy.loginfo("STARTING MILESTONE 1 PALLET STACKER MISSION")
@@ -51,8 +51,8 @@ def run_mission():
         rospy.logwarn("Mission aborted at Step 2.")
         return
 
-    # Step 3: Move to (12.5, 0.0), align to 180 deg, drop lift to 0.25 m
-    rospy.loginfo("\n>>> [STEP 3/4] Navigating to Storage Bay (12.5, 0.0) with yaw 180 deg...")
+    # Step 3: Move to (12.8, 0.0), align to 180 deg, drop lift to 0.20 m
+    rospy.loginfo("\n>>> [STEP 3/4] Navigating to Storage Bay (12.8, 0.0) with yaw 180 deg...")
     ok = controller.navigate_to(
         gx=12.8, gy=0.0, goal_yaw=180.0,
         pos_tolerance=0.05, label="WP3 (Storage Bay)"
@@ -61,7 +61,7 @@ def run_mission():
         rospy.logwarn("Mission aborted at Step 3 (Navigation).")
         return
 
-    rospy.loginfo(">>> [STEP 3/4] Lowering mast to 0.25m...")
+    rospy.loginfo(">>> [STEP 3/4] Lowering mast to 0.20m...")
     lift.set_height(0.20, speed=0.1)
 
     # Step 4: Move back out to (12.0, 0.0)
