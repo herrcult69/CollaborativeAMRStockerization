@@ -1,11 +1,8 @@
 """
-3-Phase AMR Precision Docking & Waypoint Navigation Module.
+Dedicated AMR Pallet Docking & Insertion Module.
 
-Phases:
-  1. ALIGN_TO_GOAL: Rotate in place to face target position (gx, gy).
-  2. DRIVE_TO_GOAL: Drive forward with smooth deceleration and heading correction.
-  3. ALIGN_FINAL_YAW: Rotate in place to match required docking orientation (goal_yaw).
-  4. ARRIVED: Lock zero velocity and report completion.
+Performs constrained straight-line docking maneuvers (reverse insertion and forward extraction)
+into pallet pockets with active heading stabilization and ZERO in-place spinning.
 """
 import math
 import threading
@@ -14,55 +11,51 @@ import time
 import rospy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from amr_navigation.move_to_point import normalize_angle, deg_to_rad
 
 
-def normalize_angle(angle):
-    """Normalize angle to [-pi, pi]."""
-    return math.atan2(math.sin(angle), math.cos(angle))
+def compute_dock_target_pose(pallet_x, pallet_y, dock_yaw_deg, fork_offset=0.22):
+    """
+    Computes the required drive_center coordinate so that the fork tines reach (pallet_x, pallet_y).
+    Forks are mounted on the robot's rear (-X axis).
+    /odom tracks the differential-drive fulcrum (drive_center, X = -0.10m from base_link).
+
+    fork_offset controls tine penetration depth:
+      - 0.35m → fork tine midpoint over cavity (~50% insertion, old default)
+      - 0.22m → fork heel near cavity entry (~85-90% insertion, current default)
+
+    Formula:
+        target_x = pallet_x + fork_offset * cos(yaw)
+        target_y = pallet_y + fork_offset * sin(yaw)
+
+    :param pallet_x: Target pallet pocket / cavity center X (meters)
+    :param pallet_y: Target pallet pocket / cavity center Y (meters)
+    :param dock_yaw_deg: Robot orientation during reverse docking in degrees (e.g. 270.0)
+    :param fork_offset: Distance from drive_center to fork heel reference point in meters (default: 0.22m)
+    :return: (target_drive_x, target_drive_y)
+    """
+    yaw_rad = deg_to_rad(dock_yaw_deg)
+    tx = float(pallet_x) + float(fork_offset) * math.cos(yaw_rad)
+    ty = float(pallet_y) + float(fork_offset) * math.sin(yaw_rad)
+    return tx, ty
 
 
-def deg_to_rad(deg):
-    """Convert degrees to normalized radians in [-pi, pi]."""
-    if deg is None:
-        return None
-    return normalize_angle(math.radians(float(deg)))
+# Backward compatibility alias
+compute_dock_base_pose = compute_dock_target_pose
 
 
-class ThreePhaseDockingController:
-    STATE_ALIGN_TO_GOAL = "1_ALIGN_TO_GOAL"
-    STATE_DRIVE_TO_GOAL = "2_DRIVE_TO_GOAL"
-    STATE_ALIGN_FINAL_YAW = "3_ALIGN_FINAL_YAW"
-    STATE_ARRIVED = "4_ARRIVED"
+class PalletDockingController:
+    """
+    Precision Pallet Docking Controller.
+    Designed for fork insertion into pallets where chassis rotation must be strictly prevented.
+    """
 
-    def __init__(self, max_linear=None, max_angular=None):
-        # Target coordinates and orientation
-        self.gx = float(rospy.get_param("~goal_x", 2.0))
-        self.gy = float(rospy.get_param("~goal_y", 0.0))
-
-        if rospy.has_param("~goal_yaw_rad"):
-            self.goal_yaw = normalize_angle(float(rospy.get_param("~goal_yaw_rad")))
-        else:
-            yaw_deg = float(rospy.get_param("~goal_yaw", rospy.get_param("~goal_yaw_deg", 0.0)))
-            self.goal_yaw = deg_to_rad(yaw_deg)
-
-        # Tolerances
-        self.pos_tolerance = float(rospy.get_param("~pos_tolerance", 0.05))     # 5 cm precision
-        yaw_tol_deg = float(rospy.get_param("~yaw_tolerance", rospy.get_param("~yaw_tolerance_deg", 4.0)))
-        self.yaw_tolerance = math.radians(yaw_tol_deg)  # 4.0 degrees default (clean fork docking)
-
-        # Kinematic and speed limits (Gentle warehouse speeds, tuned for Unity PhysX friction)
-        self.heading_align_threshold = math.radians(12.0)  # ~12 deg to start driving
-        default_max_linear = max_linear if max_linear is not None else 0.35
-        default_max_angular = max_angular if max_angular is not None else 0.65
-        self.max_linear = float(rospy.get_param("~max_linear", default_max_linear))
-        self.min_linear = float(rospy.get_param("~min_linear", 0.06))
-        self.max_angular = float(rospy.get_param("~max_angular", default_max_angular))
-        self.min_angular = float(rospy.get_param("~min_angular", 0.42))  # Overcomes Unity tire scrub stiction
-        self.wheel_offset_x = float(rospy.get_param("~wheel_offset_x", 0.0))
+    def __init__(self, default_dock_speed=0.08, default_tolerance=0.03):
+        self.default_dock_speed = float(rospy.get_param("~dock_speed", default_dock_speed))
+        self.default_tolerance = float(rospy.get_param("~dock_pos_tolerance", default_tolerance))
         self.receipt_timeout = float(rospy.get_param("~receipt_timeout", 1.5))
         self.clock_skew_tolerance = float(rospy.get_param("~clock_skew_tolerance", 1.0))
 
-        self.state = self.STATE_ALIGN_TO_GOAL
         self.lock = threading.Lock()
         self.sample = None
 
@@ -70,18 +63,8 @@ class ThreePhaseDockingController:
         self.sub = rospy.Subscriber("/odom", Odometry, self.on_odom, queue_size=1)
         rospy.on_shutdown(self.stop)
 
-    def set_goal(self, gx, gy, goal_yaw=None, pos_tolerance=None):
-        """Configure target for navigation."""
-        self.gx = float(gx)
-        self.gy = float(gy)
-        self.goal_yaw = deg_to_rad(goal_yaw) if goal_yaw is not None else None
-        if pos_tolerance is not None:
-            self.pos_tolerance = float(pos_tolerance)
-        self.state = self.STATE_ALIGN_TO_GOAL
-
     def on_odom(self, msg):
         if msg.header.frame_id != "odom" or msg.child_frame_id not in ("base_footprint", "base_link", "drive_center"):
-            rospy.logerr_throttle(2, "Expected odom -> base_footprint/base_link; ignoring message")
             return
 
         p = msg.pose.pose.position
@@ -97,87 +80,60 @@ class ThreePhaseDockingController:
         x, y, z, w = q.x / norm, q.y / norm, q.z / norm, q.w / norm
         yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
 
-        if abs(self.wheel_offset_x) > 1e-4:
-            axle_x = p.x + self.wheel_offset_x * math.cos(yaw)
-            axle_y = p.y + self.wheel_offset_x * math.sin(yaw)
-        else:
-            axle_x, axle_y = p.x, p.y
-
         with self.lock:
-            self.sample = (axle_x, axle_y, yaw, time.monotonic(), msg.header.stamp.to_sec())
+            self.sample = (p.x, p.y, yaw, time.monotonic(), msg.header.stamp.to_sec())
 
     def stop(self):
         cmd = Twist()
         self.pub.publish(cmd)
 
-    def compute_step(self, x, y, yaw):
-        dx = self.gx - x
-        dy = self.gy - y
-        dist_to_goal = math.hypot(dx, dy)
-        angle_to_goal = math.atan2(dy, dx)
-        heading_error = normalize_angle(angle_to_goal - yaw)
-        has_final_yaw = self.goal_yaw is not None
-        final_yaw_error = normalize_angle(self.goal_yaw - yaw) if has_final_yaw else 0.0
+    def dock_reverse(self, target_x, target_y, dock_yaw=None, speed=None, pos_tolerance=None, label="Pallet Insertion", fork_offset=0.0):
+        """
+        Reverse straight back into the pallet pocket towards (target_x, target_y).
+        Locks heading to dock_yaw and forbids in-place spinning to prevent striking pallet legs.
 
-        linear = 0.0
-        angular = 0.0
+        :param target_x: Goal X (drive_center) inside pallet cavity (meters)
+        :param target_y: Goal Y (drive_center) inside pallet cavity (meters)
+        :param dock_yaw: Locked orientation in degrees (e.g. 270.0). If None, uses initial heading.
+        :param speed: Max reverse speed in m/s (default: 0.08 m/s = 8 cm/s)
+        :param pos_tolerance: Insertion depth tolerance in meters (default: 0.03 m = 3 cm)
+        :param label: Logging descriptor
+        :param fork_offset: Lever arm offset in meters from drive_center to fork center along rear -X axis (default: 0.0)
+        """
+        tx = float(target_x)
+        ty = float(target_y)
+        if fork_offset > 0.0 and dock_yaw is not None:
+            raw_tx, raw_ty = tx, ty
+            tx, ty = compute_dock_target_pose(raw_tx, raw_ty, dock_yaw, fork_offset)
+            rospy.loginfo("[Pallet Docking] Applied Fork Offset: %.2fm -> drive_center target adjusted from (%.2f, %.2f) to (%.2f, %.2f)",
+                          fork_offset, raw_tx, raw_ty, tx, ty)
 
-        # Phase 1: Turn towards goal point
-        if self.state == self.STATE_ALIGN_TO_GOAL:
-            if dist_to_goal <= self.pos_tolerance:
-                if has_final_yaw:
-                    self.state = self.STATE_ALIGN_FINAL_YAW
-                else:
-                    self.state = self.STATE_ARRIVED
-            elif abs(heading_error) < self.heading_align_threshold:
-                self.state = self.STATE_DRIVE_TO_GOAL
-            else:
-                sign = 1.0 if heading_error > 0 else -1.0
-                angular = max(self.min_angular, min(self.max_angular, 1.6 * abs(heading_error))) * sign
+        v_max = float(speed) if speed is not None else self.default_dock_speed
+        tol = float(pos_tolerance) if pos_tolerance is not None else self.default_tolerance
+        locked_yaw_rad = deg_to_rad(dock_yaw) if dock_yaw is not None else None
 
-        # Phase 2: Drive towards goal
-        if self.state == self.STATE_DRIVE_TO_GOAL:
-            if dist_to_goal <= self.pos_tolerance:
-                if has_final_yaw:
-                    self.state = self.STATE_ALIGN_FINAL_YAW
-                else:
-                    self.state = self.STATE_ARRIVED
-            elif abs(heading_error) > 0.65 and dist_to_goal > 2.0 * self.pos_tolerance:
-                self.state = self.STATE_ALIGN_TO_GOAL
-            else:
-                # Gentle deceleration ramp
-                target_v = min(self.max_linear, max(self.min_linear, 0.45 * dist_to_goal))
-                linear = target_v * max(0.0, math.cos(heading_error))
-                angular = max(-self.max_angular, min(self.max_angular, 1.8 * heading_error))
-
-        # Phase 3: Align final orientation
-        if self.state == self.STATE_ALIGN_FINAL_YAW:
-            # Closed-loop recovery: if turning on the spot causes position drift beyond tolerance
-            if dist_to_goal > 1.6 * self.pos_tolerance:
-                if abs(heading_error) > 0.65:
-                    self.state = self.STATE_ALIGN_TO_GOAL
-                else:
-                    self.state = self.STATE_DRIVE_TO_GOAL
-            elif abs(final_yaw_error) <= self.yaw_tolerance:
-                self.state = self.STATE_ARRIVED
-            else:
-                sign = 1.0 if final_yaw_error > 0 else -1.0
-                angular = max(self.min_angular, min(self.max_angular, 1.8 * abs(final_yaw_error))) * sign
-
-        active_err = final_yaw_error if self.state == self.STATE_ALIGN_FINAL_YAW else heading_error
-        return linear, angular, dist_to_goal, active_err, final_yaw_error
-
-    def navigate_to(self, gx, gy, goal_yaw=None, pos_tolerance=None, label="Target"):
-        """Blocking call to execute 3-phase navigation to a target."""
-        self.set_goal(gx, gy, goal_yaw, pos_tolerance)
         rate = rospy.Rate(20)
+        rospy.loginfo("==================================================")
+        rospy.loginfo(">>> STARTING PALLET REVERSE DOCKING: %s", label)
+        rospy.loginfo("Target drive_center: (%.2f, %.2f) | Locked Yaw: %s | Max Creep Speed: -%.2fm/s",
+                      tx, ty, f"{dock_yaw:.1f} deg" if dock_yaw is not None else "Current", v_max)
+        rospy.loginfo("==================================================")
 
-        yaw_str = f"{goal_yaw:.1f} deg" if goal_yaw is not None else "Transit"
-        rospy.loginfo(">>> Navigating to %s: (%.2f, %.2f) | Yaw: %s | Max Speed: %.2fm/s",
-                      label, self.gx, self.gy, yaw_str, self.max_linear)
+        # Wait for odom
+        while not rospy.is_shutdown():
+            with self.lock:
+                sample = self.sample
+            if sample is not None:
+                break
+            self.stop()
+            rate.sleep()
 
-        last_yaw = None
-        stall_counter = 0
+        if sample is None:
+            return False
+
+        # If no explicit dock yaw was provided, lock to current orientation
+        if locked_yaw_rad is None:
+            locked_yaw_rad = sample[2]
 
         while not rospy.is_shutdown():
             with self.lock:
@@ -185,7 +141,6 @@ class ThreePhaseDockingController:
 
             if sample is None:
                 self.stop()
-                rospy.logwarn_throttle(2, "Waiting for /odom stream...")
                 rate.sleep()
                 continue
 
@@ -196,56 +151,98 @@ class ThreePhaseDockingController:
 
             if receipt_gap > self.receipt_timeout or abs(age) > self.clock_skew_tolerance:
                 self.stop()
-                rospy.logerr("Odometry timeout (gap=%.3fs, age=%.3fs). Stopped.", receipt_gap, age)
+                rospy.logerr("[Docking] Odometry timeout. Stopped.")
                 return False
 
-            linear, angular, dist, active_err, final_yaw_err = self.compute_step(x, y, yaw)
+            dx = tx - x
+            dy = ty - y
+            dist_to_dock = math.hypot(dx, dy)
 
-            # Anti-stiction dither: detect if robot is physically stuck against floor friction
-            if abs(angular) > 1e-4 and abs(linear) < 1e-4:
-                if last_yaw is not None and abs(normalize_angle(yaw - last_yaw)) < 0.003:
-                    stall_counter += 1
-                    # If stuck for > 0.6 seconds (12 cycles at 20Hz), apply a breakaway kick
-                    if stall_counter > 12:
-                        kick_speed = min(self.max_angular, abs(angular) + 0.18)
-                        angular = math.copysign(kick_speed, angular)
-                        if stall_counter % 20 == 0:
-                            rospy.loginfo_throttle(1, "[Docking] Stiction detected at yaw %.1f deg - applying breakaway kick (%.2frad/s)",
-                                                   math.degrees(yaw), angular)
-                else:
-                    stall_counter = 0
-            else:
-                stall_counter = 0
+            # Heading error relative to locked pallet tunnel axis
+            yaw_err = normalize_angle(locked_yaw_rad - yaw)
 
-            last_yaw = yaw
+            # Longitudinal distance along robot's current heading
+            # (Negative when target is behind the robot)
+            d_long = dx * math.cos(yaw) + dy * math.sin(yaw)
 
-            cmd = Twist()
-            cmd.linear.x = linear
-            cmd.angular.z = angular
-            self.pub.publish(cmd)
-
-            rospy.loginfo_throttle(1, "[%s | %s] Dist: %.2fm | Linear: %.2fm/s | Ang: %.2frad/s | Err: %.1f deg",
-                                   label, self.state, dist, linear, angular, math.degrees(active_err))
-
-            if self.state == self.STATE_ARRIVED:
+            # Check if arrived within tolerance (or if robot passed the target depth)
+            if dist_to_dock <= tol or d_long >= 0.0:
                 for _ in range(6):
                     self.stop()
                     time.sleep(0.04)
-
-                rospy.loginfo(">>> REACHED %s at (%.3f, %.3f), Yaw: %.2f deg (Dist err: %.3fm)",
-                              label, x, y, math.degrees(yaw), dist)
+                rospy.loginfo(">>> PALLET DOCK COMPLETE: %s at (%.3f, %.3f), Yaw: %.2f deg (Dist: %.3fm)",
+                              label, x, y, math.degrees(yaw), dist_to_dock)
                 return True
+
+            # Controlled reverse velocity (smoothly slow down as target depth nears)
+            # Minimum creep of 0.07 m/s (7 cm/s) breaks Unity wheel stiction cleanly
+            v_cmd = -min(v_max, max(0.07, 0.70 * abs(d_long)))
+
+            # Active heading stabilization (tight clamp so robot cannot swing forks sideways)
+            w_cmd = max(-0.18, min(0.18, 1.6 * yaw_err))
+
+            cmd = Twist()
+            cmd.linear.x = v_cmd
+            cmd.angular.z = w_cmd
+            self.pub.publish(cmd)
+
+            rospy.loginfo_throttle(1, "[%s] Dist: %.3fm (Long: %.3fm) | V: %.2fm/s | YawErr: %.1f deg",
+                                   label, dist_to_dock, d_long, v_cmd, math.degrees(yaw_err))
 
             rate.sleep()
 
         return False
 
-    def run(self):
-        """Run single-goal node as configured from ROS parameters."""
-        goal_yaw_deg = math.degrees(self.goal_yaw) if self.goal_yaw is not None else None
-        success = self.navigate_to(self.gx, self.gy, goal_yaw=goal_yaw_deg,
-                                   pos_tolerance=self.pos_tolerance, label="Goal")
-        if success:
-            rospy.loginfo("==================================================")
-            rospy.loginfo("SUCCESS: AMR DOCKED AT GOAL!")
-            rospy.loginfo("==================================================")
+    def undock(self, target_x, target_y, dock_yaw=None, speed=0.10, pos_tolerance=0.04, label="Pallet Extraction"):
+        """
+        Pull straight forward out of the pallet cavity to clear forks.
+        Locks heading and forbids turning until forks are completely clear.
+        """
+        tx = float(target_x)
+        ty = float(target_y)
+        v_max = float(speed)
+        tol = float(pos_tolerance)
+        locked_yaw_rad = deg_to_rad(dock_yaw) if dock_yaw is not None else None
+
+        rate = rospy.Rate(20)
+        rospy.loginfo(">>> EXTRACTING FORKS (UNDOCK): %s to (%.2f, %.2f)", label, tx, ty)
+
+        while not rospy.is_shutdown():
+            with self.lock:
+                sample = self.sample
+
+            if sample is None:
+                self.stop()
+                rate.sleep()
+                continue
+
+            x, y, yaw, received, stamp = sample
+            if locked_yaw_rad is None:
+                locked_yaw_rad = yaw
+
+            dx = tx - x
+            dy = ty - y
+            dist = math.hypot(dx, dy)
+            yaw_err = normalize_angle(locked_yaw_rad - yaw)
+            d_long = dx * math.cos(yaw) + dy * math.sin(yaw)
+
+            if dist <= tol or d_long <= 0.0:
+                for _ in range(6):
+                    self.stop()
+                    time.sleep(0.04)
+                rospy.loginfo(">>> UNDOCK COMPLETE: %s clear of pallet.", label)
+                return True
+
+            # Controlled forward velocity (minimum 0.07 m/s breaks Unity wheel stiction cleanly)
+            v_cmd = min(v_max, max(0.07, 0.70 * d_long))
+            w_cmd = max(-0.18, min(0.18, 1.6 * yaw_err))
+
+            cmd = Twist()
+            cmd.linear.x = v_cmd
+            cmd.angular.z = w_cmd
+            self.pub.publish(cmd)
+
+            rospy.loginfo_throttle(1, "[%s] Clearing Dist: %.3fm | V: %.2fm/s", label, dist, v_cmd)
+            rate.sleep()
+
+        return False
