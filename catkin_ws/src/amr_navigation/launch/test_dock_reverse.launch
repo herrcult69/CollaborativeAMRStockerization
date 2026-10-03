@@ -1,0 +1,21 @@
+<launch>
+  <param name="/use_sim_time" value="true" />
+
+  <!-- Pallet Target & Staging Parameters -->
+  <arg name="pallet_x" default="4.0" />
+  <arg name="pallet_y" default="5.0" />
+  <arg name="dock_yaw" default="270.0" />
+  <arg name="dock_speed" default="0.12" />
+  <arg name="fork_offset" default="0.22" />
+  <arg name="perform_undock" default="true" />
+
+  <!-- Test Pallet Staging, Reverse Insertion & Under-Rack Extraction -->
+  <node pkg="amr_navigation" type="test_dock_reverse.py" name="test_dock_reverse" output="screen">
+    <param name="pallet_x" value="$(arg pallet_x)" />
+    <param name="pallet_y" value="$(arg pallet_y)" />
+    <param name="dock_yaw" value="$(arg dock_yaw)" />
+    <param name="dock_speed" value="$(arg dock_speed)" />
+    <param name="fork_offset" value="$(arg fork_offset)" />
+    <param name="perform_undock" value="$(arg perform_undock)" />
+  </node>
+</launch>
