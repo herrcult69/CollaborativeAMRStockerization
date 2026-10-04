@@ -1,0 +1,68 @@
+DWAPlannerROS:
+  # holonomic_robot: false
+  odom_topic: /odom
+  # -------------------------------------------------------
+  # Robot velocity limits
+  # -------------------------------------------------------
+  
+  max_vel_x: 0.25
+  min_vel_x: 0.0
+
+  max_vel_y: 0.0
+  min_vel_y: 0.0
+
+  max_vel_trans: 0.25
+  min_vel_trans: 0.03
+
+  max_vel_theta: 1.0 #0.45
+  min_vel_theta: 0.5 #0.3
+
+  # Acceleration limits
+  acc_lim_x: 1.0 #0.4
+  acc_lim_y: 0.0
+  acc_lim_trans: 1.0 #0.4
+  acc_lim_theta: 3.0 #0.6
+
+  # -------------------------------------------------------
+  # Goal tolerance
+  # -------------------------------------------------------
+
+  xy_goal_tolerance: 0.05 #0.2
+  yaw_goal_tolerance: 0.08 
+
+  latch_xy_goal_tolerance: true
+
+
+  # -------------------------------------------------------
+  # Simulation
+  # -------------------------------------------------------
+
+  sim_time: 1.5
+
+  vx_samples: 30 #10
+  vtheta_samples: 20
+
+  angular_sim_granularity: 0.05
+
+  # -------------------------------------------------------
+  # Scoring
+  # -------------------------------------------------------
+
+  path_distance_bias: 32.0
+  goal_distance_bias: 20.0
+
+  occdist_scale: 0.05
+
+  # =====================================================
+  # OTHER
+  # =====================================================
+
+  forward_point_distance: 0.325
+
+  stop_time_buffer: 0.2
+
+  scaling_speed: 0.20
+  max_scaling_factor: 0.2
+
+  oscillation_reset_dist: 0.05
+  oscillation_reset_angle: 0.20
