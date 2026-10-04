@@ -1,4 +1,6 @@
 <launch>
+  <arg name="robot_profile" default="xstack" doc="xstack or legacy; must match the Unity scene" />
+  <arg name="base_frame" value="$(eval {'xstack': 'drive_center', 'legacy': 'base_footprint'}[arg('robot_profile')])" />
   <!-- Prerequisites: Unity, bridge, sensor TF, map_server + AMCL, initial pose.
        Stop costmap_preview and go_to_point first. This launch drives /cmd_vel. -->
   <param name="/use_sim_time" value="true" />
@@ -8,8 +10,10 @@
   <arg name="oscillation_timeout" default="60.0" />
   <node pkg="move_base" type="move_base" name="move_base" output="screen">
     <rosparam command="load" file="$(find amr_navigation)/config/costmap_common.yaml" ns="global_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/robot_$(arg robot_profile).yaml" ns="global_costmap" />
     <rosparam command="load" file="$(find amr_navigation)/config/global_costmap.yaml" ns="global_costmap" />
     <rosparam command="load" file="$(find amr_navigation)/config/costmap_common.yaml" ns="local_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/robot_$(arg robot_profile).yaml" ns="local_costmap" />
     <rosparam command="load" file="$(find amr_navigation)/config/local_costmap.yaml" ns="local_costmap" />
     <rosparam command="load" file="$(find amr_navigation)/config/dwa_warehouse.yaml" ns="DWAPlannerROS" />
     <param name="base_global_planner" value="navfn/NavfnROS" />

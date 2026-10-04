@@ -1,6 +1,9 @@
 <launch>
+  <!-- Standalone description inspection; stop laser_tf.launch before using this. -->
+  <arg name="robot_profile" default="xstack" doc="xstack or legacy; must match the Unity scene" />
+
   <!-- Load the URDF into the ROS Parameter Server -->
-  <param name="robot_description" textfile="$(find amr_description)/urdf/stacker_amr.urdf" />
+  <param name="robot_description" textfile="$(find amr_description)/urdf/$(eval {'xstack': 'xstack_amr', 'legacy': 'stacker_amr'}[arg('robot_profile')]).urdf" />
 
   <!-- Joint state publisher GUI to interactively test wheel & lift joints -->
   <node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui" />

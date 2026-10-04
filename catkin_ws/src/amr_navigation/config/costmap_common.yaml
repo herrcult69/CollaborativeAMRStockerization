@@ -1,10 +1,5 @@
-# Teaching envelope, UNLOADED robot: ROS x forward, y left, metres.
-# URDF fork tip ~-0.85, chassis front +0.30. Width intentionally conservative.
-# Validate against scene colliders/cargo before enabling autonomous navigation.
-robot_base_frame: base_footprint
+# Shared costmap settings. Load robot_<profile>.yaml afterward.
 transform_tolerance: 0.3
-footprint: [[0.35, 0.35], [-0.90, 0.35], [-0.90, -0.35], [0.35, -0.35]]
-footprint_padding: 0.02
 resolution: 0.05
 always_send_full_costmap: true
 

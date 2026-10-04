@@ -1,7 +1,9 @@
 <launch>
+  <arg name="robot_profile" default="xstack" doc="xstack or legacy; must match the Unity scene" />
+  <arg name="base_frame" value="$(eval {'xstack': 'drive_center', 'legacy': 'base_footprint'}[arg('robot_profile')])" />
   <!-- Run after stopping gmapping. Bridge, Unity publishers and mount TF
        remain separate; this launch does not command robot motion. -->
-  <arg name="map_file" default="$(find amr_navigation)/maps/warehouse_training_01.yaml" />
+  <arg name="map_file" doc="Required measured map matching the scene; no XStack map has been captured yet" />
   <param name="/use_sim_time" value="true" />
   <node pkg="map_server" type="map_server" name="map_server"
         args="&quot;$(arg map_file)&quot;" output="screen">
@@ -12,7 +14,7 @@
     <param name="use_map_topic" value="true" />
     <param name="global_frame_id" value="map" />
     <param name="odom_frame_id" value="odom" />
-    <param name="base_frame_id" value="base_footprint" />
+    <param name="base_frame_id" value="$(arg base_frame)" />
     <param name="tf_broadcast" value="true" />
     <param name="odom_model_type" value="diff" />
     <param name="laser_model_type" value="likelihood_field" />

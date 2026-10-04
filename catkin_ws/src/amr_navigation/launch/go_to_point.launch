@@ -1,7 +1,10 @@
 <launch>
+  <arg name="robot_profile" default="xstack" doc="xstack or legacy; must match the Unity scene" />
+  <arg name="base_frame" value="$(eval {'xstack': 'drive_center', 'legacy': 'base_footprint'}[arg('robot_profile')])" />
   <arg name="goal_x" default="2.0" />
   <arg name="goal_y" default="0.0" />
   <node pkg="amr_navigation" type="go_to_point.py" name="go_to_point" output="screen">
+    <param name="base_frame" value="$(arg base_frame)" />
     <param name="goal_x" value="$(arg goal_x)" />
     <param name="goal_y" value="$(arg goal_y)" />
     <param name="tolerance" value="0.2" />

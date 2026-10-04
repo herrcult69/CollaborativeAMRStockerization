@@ -10,6 +10,7 @@ from nav_msgs.msg import Odometry
 
 
 def command_for_goal(x, y, yaw, gx, gy, tolerance, max_linear, max_angular):
+    # Calculates the motion command
     distance = math.hypot(gx - x, gy - y)
     error = math.atan2(gy - y, gx - x) - yaw
     error = math.atan2(math.sin(error), math.cos(error))
@@ -18,11 +19,13 @@ def command_for_goal(x, y, yaw, gx, gy, tolerance, max_linear, max_angular):
     angular = max(-max_angular, min(max_angular, 1.5 * error))
     # Turn first when facing away; slow down near the target.
     linear = min(max_linear, 0.6 * distance) if abs(error) < 0.35 else 0.0
+    # curent max linear = 0.2 -> if distance far away -> speed = 0.2 else 0.6 * distance
     return linear, angular, distance
 
 
 class GoToPoint:
     def __init__(self):
+        self.base_frame = rospy.get_param("~base_frame", "drive_center")
         self.gx = float(rospy.get_param("~goal_x", 2.0))
         self.gy = float(rospy.get_param("~goal_y", 0.0))
         self.tolerance = float(rospy.get_param("~tolerance", 0.2))
@@ -38,11 +41,14 @@ class GoToPoint:
         rospy.on_shutdown(self.stop)
 
     def on_odom(self, msg):
-        if msg.header.frame_id != "odom" or msg.child_frame_id != "base_footprint":
-            rospy.logerr_throttle(2, "Expected odom -> base_footprint; ignoring message")
+        # Checks incoming odometry, extracts yaw, and stores the latest pose and timestamps.
+        if msg.header.frame_id != "odom" or msg.child_frame_id != self.base_frame:
+            rospy.logerr_throttle(2, "Expected odom -> %s; ignoring message", self.base_frame)
             return
         p = msg.pose.pose.position
         q = msg.pose.pose.orientation
+        # p.x and p.y give position.
+        # Orientation arrives as a quaternion, four numbers: q=(q_x,q_y,q_z,q_w)
         values = [p.x, p.y, q.x, q.y, q.z, q.w]
         if not all(math.isfinite(v) for v in values):
             return
@@ -58,6 +64,7 @@ class GoToPoint:
         self.pub.publish(Twist())
 
     def run(self):
+        # Repeatedly checks the stored pose, calculates commands, and publishes them.
         rospy.loginfo("Goal in odom: (%.2f, %.2f), tolerance %.2f m", self.gx, self.gy, self.tolerance)
         # Wall-clock loop continues to stop commands even if ROS simulation time pauses.
         while not rospy.is_shutdown():
