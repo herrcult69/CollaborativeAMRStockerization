@@ -19,6 +19,7 @@ Test Pallet Reverse Undocking & Delivery Mission:
 import math
 import rospy
 from amr_navigation.move_to_point import MoveToPointController
+from amr_navigation.move_base_nav import MoveBaseNavigator
 from amr_navigation.docking import PalletDockingController, compute_dock_target_pose
 from amr_navigation.lift import LiftController
 
@@ -92,7 +93,10 @@ def run_undock_reverse_test():
 
     # Initialize controllers (if skipping pickup, current lift height is assumed ~0.15m from previous extraction)
     initial_lift = 0.15 if skip_pickup else 0.00
-    nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65)
+
+    fine = MoveToPointController(max_linear=0.15, max_angular=0.65)   # slow, for last-cm alignment
+    nav = MoveBaseNavigator(frame="odom", refine=fine)
+
     dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04)
     lift = LiftController(default_speed=lift_speed, initial_height=initial_lift)
 

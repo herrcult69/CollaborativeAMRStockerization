@@ -217,6 +217,17 @@ Runs the 4-waypoint demonstration mission: $(4.0, 4.0, 270^\circ, \text{lift } 0
 roslaunch amr_navigation milestone1.launch
 ```
 
+#### E. Run the Reverse Undocking & Staging Delivery Mission with ROS Navigation Stack (`move_base`)
+```bash
+# 1. robot_state_publisher (publishes odometry and TF tree)
+roslaunch amr_navigation robot_state_publisher.launch
+
+# 2. move_base
+roslaunch amr_navigation move_base.launch
+
+# 3. full mission with move_base navigation:
+roslaunch amr_navigation test_undock_reverse.launch station_x:=13.0 station_y:=0.0 station_yaw:=180.0 standoff:=0.8 transit_speed:=0.45 dock_speed:=0.12
+```
 ---
 
 ### Step 4: (Optional) Open RViz to See the Robot's Mind
@@ -236,6 +247,7 @@ To inspect coordinate frames (`odom -> drive_center`) and odometry vectors:
 1. Set **Fixed Frame** to `odom`.
 2. Click **Add** (bottom left), select **TF** (shows coordinate frame axes).
 3. Click **Add**, select **Odometry**, and set Topic to `/odom` (shows robot position arrows).
+4. Add costmaps by clicking **Add**, selecting **By Topic**, and choosing `/move_base/local_costmap/costmap` and `/move_base/global_costmap/costmap`.
 
 ---
 
