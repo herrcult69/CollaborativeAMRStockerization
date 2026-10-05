@@ -136,31 +136,37 @@ roslaunch amr_navigation move_to_point.launch goal_x:=4.0 goal_y:=3.85 goal_yaw:
 
 ---
 
-#### B. Pallet Reverse Docking & Extraction Test (`test_dock_reverse.launch`)
-Executes an end-to-end 5-phase pallet pickup from a storage rack:
+#### B. Pallet Rack Reverse Docking & Extraction Test (`test_dock_reverse.launch`)
+Executes an isolated 5-phase reverse docking, lift, and extraction test from a pallet storage rack:
 1. Navigates to pre-dock standoff ($0.8\text{ m}$ in front of dock target)
-2. Lowers mast to ground entry height ($-0.02\text{ m}$, forks float $30\text{ mm}$ off floor into $60\text{ mm}$ cavity)
+2. Positions mast to entry height ($-0.020\text{ m}$ for bottom; $+0.240\text{ m}$ for top; $+0.640\text{ m}$ for shelf)
 3. Reverses straight into pallet cavity (`dock_reverse()`) with locked heading and stiction clamp ($\ge 0.07\text{ m/s}$)
-4. Elevates mast to under-rack safe height ($+0.015\text{ m}$, $17\text{ mm}$ headroom below $0.592\text{ m}$ rack beam)
-5. Extracts pallet straight forward into the open aisle (`undock()`)
+4. Elevates mast to pick height ($+0.010\text{ m}$ for bottom; $+0.290\text{ m}$ for top; $+0.685\text{ m}$ for shelf) — standardizing a uniform **$20\text{ mm}$ pallet lift** across all tiers
+5. Pulls straight forward (`undock()`) to extract pallet into the aisle, then positions mast to open-aisle transit height ($0.15\text{ m}$ for bottom, $0.29\text{ m}$ for top, $0.28\text{ m}$ for shelf)
 
 ```bash
-# Run default rack pickup test at (4.0, 5.0) facing 270 deg:
+# Run default rack docking test at (4.0, 5.0) facing 270 deg (bottom level):
 roslaunch amr_navigation test_dock_reverse.launch
 
-# Custom pallet location, deep penetration, and speed:
-roslaunch amr_navigation test_dock_reverse.launch pallet_x:=4.0 pallet_y:=5.0 dock_yaw:=270.0 fork_offset:=0.22 dock_speed:=0.12 perform_undock:=true
+# Pick upper pallet (second height) of a double stack:
+roslaunch amr_navigation test_dock_reverse.launch pick_level:=top
+
+# Pick pallet from second-tier rack shelf:
+roslaunch amr_navigation test_dock_reverse.launch pick_level:=shelf
+
+# Custom pallet location, penetration depth, and creep speed:
+roslaunch amr_navigation test_dock_reverse.launch pallet_x:=4.0 pallet_y:=5.0 dock_yaw:=270.0 fork_offset:=0.22 dock_speed:=0.12
 ```
 
 **Configurable Arguments:**
 | Argument | Default | Type | Description |
 |---|---|---|---|
+| `pick_level` | `bottom` | string | Target pallet height: `"bottom"` / `"1"` (ground double stack), `"top"` / `"2"` (upper pallet), or `"shelf"` / `"3"` (rack tier 2) |
 | `pallet_x` | `4.0` | float | Target pallet cavity center X coordinate (meters) |
 | `pallet_y` | `5.0` | float | Target pallet cavity center Y coordinate (meters) |
 | `dock_yaw` | `270.0` | float | Locked reverse docking orientation in degrees |
 | `fork_offset` | `0.22` | float | Distance from `drive_center` to fork reference point ($0.22\text{ m} = 85\text{--}90\%$ tine penetration) |
 | `dock_speed` | `0.12` | float | Maximum reverse creep speed ($\text{m/s}$, minimum clamp $\ge 0.07\text{ m/s}$ prevents stiction stall) |
-| `perform_undock` | `true` | bool | Whether to pull forward after lifting to extract pallet into aisle |
 
 > **Standalone Docking Node (`docking.launch`)**: For testing raw reverse docking without navigation or mast lift:
 > ```bash
@@ -169,30 +175,87 @@ roslaunch amr_navigation test_dock_reverse.launch pallet_x:=4.0 pallet_y:=5.0 do
 
 ---
 
-#### C. Reverse Undocking & Staging Delivery Mission (`test_undock_reverse.launch`)
-Executes the full 7-phase pick-and-place replenishment mission:
-1. Picks double-stacked pallet from rack at $(4.0, 5.0)$ (skippable via `skip_pickup:=true`)
-2. Elevates mast to transit clearance height ($0.28\text{ m}$, pallet bottom clears $0.25\text{ m}$ staging station by $40\text{ mm}$)
-3. Navigates Manhattan orthogonal corridor: $(4.0, 5.0) \to (4.0, 0.0) \to (11.98, 0.0)$, aligning to $180.0^\circ$
-4. Reverses over the $25\text{ cm}$ tall staging station dock at $(13.0, 0.0)$, stopping `drive_center` at $12.78\text{ m}$
-5. Lowers mast to deposit height ($0.21\text{ m}$): pallet settles onto station deck at $0.24\text{ m}$, forks float freely in cavity
-6. Undocks forward to standoff pose ($11.98\text{ m}$), cleanly extracting forks while leaving pallet resting on the station
-7. Homes mast elevation to $0.00\text{ m}$ (idle/travel height)
+#### C. Staging Station Reverse Dock & Undock Extraction Test (`test_undock_reverse.launch`)
+Executes an isolated 6-phase test of approaching the $25\text{ cm}$ staging station at $(13.0, 0.0)$, lowering the mast to deposit height, and performing forward undock extraction (even if no pallet has been picked up yet):
+1. Navigates directly to station pre-dock standoff pose ($11.98\text{ m}, 0.0\text{ m}$, yaw $180.0^\circ$)
+2. Elevates mast to safe transit height ($0.28\text{ m}$, clears $0.25\text{ m}$ station by $40\text{ mm}$)
+3. Reverses over the $25\text{ cm}$ staging station to stop pose ($12.78\text{ m}, 0.0\text{ m}$)
+4. Lowers mast to deposit height ($0.21\text{ m}$): forks float $10\text{ mm}$ above station surface
+5. Undocks forward to standoff pose ($11.98\text{ m}$) with locked yaw $180.0^\circ$, extracting forks cleanly
+6. Lowers mast to idle/transit height ($0.00\text{ m}$)
 
 ```bash
-# Run full pick-and-place mission:
+# Run isolated staging station undock test at (13.0, 0.0):
 roslaunch amr_navigation test_undock_reverse.launch
 
-# If robot already holds pallet, skip pickup phase and deliver directly:
-roslaunch amr_navigation test_undock_reverse.launch skip_pickup:=true
-
-# Custom station position, standoff, and cruise speeds:
-roslaunch amr_navigation test_undock_reverse.launch station_x:=13.0 station_y:=0.0 station_yaw:=180.0 standoff:=0.8 transit_speed:=0.45 dock_speed:=0.12
+# Custom station position, standoff, and speeds:
+roslaunch amr_navigation test_undock_reverse.launch station_x:=13.0 station_y:=0.0 station_yaw:=180.0 standoff:=0.8 transit_speed:=0.45 dock_speed:=0.12 lift_speed:=0.06
 ```
 
 **Configurable Arguments:**
 | Argument | Default | Type | Description |
 |---|---|---|---|
+| `station_x` | `13.0` | float | Staging station / workbench dock cavity X (meters) |
+| `station_y` | `0.0` | float | Staging station / workbench dock cavity Y (meters) |
+| `station_yaw` | `180.0` | float | Station approach heading in degrees (robot faces $180^\circ$ West, forks point East) |
+| `fork_offset` | `0.22` | float | Tine penetration offset from `drive_center` ($0.22\text{ m}$) |
+| `standoff` | `0.8` | float | Frontal standoff distance ($\text{m}$) before dock stop pose (yields $\sim 1.0\text{ m}$ clearance to station) |
+| `transit_lift_height`| `0.28` | float | Mast height ($\text{m}$) during approach ($40\text{ mm}$ clearance above $0.25\text{ m}$ station) |
+| `deposit_lift_height`| `0.21` | float | Mast height ($\text{m}$) for deposit (pallet settles on deck, forks float free) |
+| `dock_speed` | `0.12` | float | Docking reverse creep speed limit ($\text{m/s}$) |
+| `transit_speed` | `0.45` | float | Linear speed limit to station staging standoff ($\text{m/s}$) |
+| `lift_speed` | `0.06` | float | Mast elevation vertical speed limit ($\text{m/s}$) |
+
+---
+
+#### D. Full Milestone 1 Replenishment Mission (`milestone1.launch`)
+Executes the complete, end-to-end autonomous warehouse workflow combining rack pickup, orthogonal corridor transit, and staging station deposit:
+1. **Rack Approach & Staging**: Navigates to rack pre-dock standoff $(4.00, 3.98, 270.0^\circ)$
+2. **Mast Lowering/Positioning**: Positions mast to entry height (`-0.020m` for bottom pallet; `+0.240m` for upper pallet; `+0.640m` for shelf pallet)
+3. **Rack Docking**: Reverses straight into pallet cavity at $(4.0, 5.0)$ -> `drive_center` stops at $(4.0, 4.78)$
+4. **Under-Rack Lift**: Elevates mast to pick height (`+0.010m` for bottom; `+0.290m` for upper; `+0.685m` for shelf) — lifting every pallet by an identical **$20\text{ mm}$** off its support, preserving safe $12\text{ mm}$ headroom below under-rack beams and safe clearance below upper shelf ceilings
+5. **Rack Extraction**: Undocks forward out of rack back to $(4.0, 3.98)$
+6. **Transit Elevation**: Elevates / positions mast to transit height ($0.28\text{--}0.29\text{ m}$, providing $40\text{--}50\text{ mm}$ clearance over $0.25\text{ m}$ station)
+7. **Corridor Navigation (Manhattan)**: Navigates to junction $(4.0, 0.0)$, then down corridor highway to station staging pose $(11.98, 0.0)$ facing $180.0^\circ$
+8. **Station Reverse Docking**: Reverses over $25\text{ cm}$ station to stop pose $(12.78, 0.0)$
+9. **Station Deposit**: Lowers mast to $0.21\text{ m}$ (pallet settles onto station at $0.24\text{ m}$, forks sink into cavity)
+10. **Station Undock Extraction**: Pulls forward to standoff $(11.98, 0.0)$, leaving pallet resting on the station
+11. **Mast Home**: Lowers mast to $0.00\text{ m}$ (idle height) — Mission Complete!
+
+```bash
+# Run full end-to-end replenishment mission (bottom pallet):
+roslaunch amr_navigation milestone1.launch
+
+# Pick upper pallet (second height in double stack) and deliver to station:
+roslaunch amr_navigation milestone1.launch pick_level:=top
+
+# Pick from second-tier rack shelf:
+roslaunch amr_navigation milestone1.launch pick_level:=shelf
+
+# Pick from a different rack bay location (e.g. bay at x=6.0, y=5.0):
+roslaunch amr_navigation milestone1.launch pallet_x:=6.0 pallet_y:=5.0 dock_yaw:=270.0
+
+# Skip rack pickup if AMR already has pallet loaded:
+roslaunch amr_navigation milestone1.launch skip_pickup:=true
+
+# High-speed demo run:
+roslaunch amr_navigation milestone1.launch transit_speed:=0.75 dock_speed:=0.15 lift_speed:=0.10
+```
+
+#### Pallet Pickup Level Kinematic Specifications (Standardized Option 1: Uniform 20mm Lift)
+
+| `pick_level` | Entry Mast $q$ | Fork Tines at Entry ($Z_{\text{bottom}} \to Z_{\text{top}}$) | Pick Mast $q$ | Pick $Z_{\text{top}}$ | Net Pallet Lift | Overhead Clearance |
+| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| **`bottom`** / `1` | **$-0.020\text{ m}$** | $30\text{ mm} \to 50\text{ mm}$ | **$+0.010\text{ m}$** | $0.080\text{ m}$ | **$+20\text{ mm}$ off floor** | $12\text{ mm}$ headroom below $0.592\text{ m}$ rack beam |
+| **`top`** / `2` | **$+0.240\text{ m}$** | $290\text{ mm} \to 310\text{ mm}$ | **$+0.290\text{ m}$** | $0.360\text{ m}$ | **$+20\text{ mm}$ off lower box** | $12\text{ mm}$ headroom below $0.592\text{ m}$ rack beam |
+| **`shelf`** / `3` | **$+0.640\text{ m}$** | $690\text{ mm} \to 710\text{ mm}$ | **$+0.685\text{ m}$** | $0.755\text{ m}$ | **$+20\text{ mm}$ off shelf** | Safe clearance below upper shelf ceiling |
+
+*(Fork tine thickness = $20\text{ mm}$; Kinematic relation: $Z_{\text{fork\_bottom}} = 0.050 + q\text{ m}$, $Z_{\text{fork\_top}} = 0.070 + q\text{ m}$).*
+
+**Configurable Arguments:**
+| Argument | Default | Type | Description |
+|---|---|---|---|
+| `pick_level` | `bottom` | string | Target pickup level: `"bottom"` / `"1"` (ground double stack), `"top"` / `"2"` (upper pallet), or `"shelf"` / `"3"` (tier 2 shelf) |
 | `skip_pickup` | `false` | bool | If `true`, assumes pallet is already on forks and starts directly at transit phase |
 | `pallet_x` | `4.0` | float | Rack pallet pickup cavity X coordinate (meters) |
 | `pallet_y` | `5.0` | float | Rack pallet pickup cavity Y coordinate (meters) |
@@ -203,19 +266,12 @@ roslaunch amr_navigation test_undock_reverse.launch station_x:=13.0 station_y:=0
 | `station_x` | `13.0` | float | Staging station / workbench dock cavity X (meters) |
 | `station_y` | `0.0` | float | Staging station / workbench dock cavity Y (meters) |
 | `station_yaw` | `180.0` | float | Station approach heading in degrees (robot faces $180^\circ$ West, forks point East) |
-| `standoff` | `0.8` | float | Frontal standoff distance ($\text{m}$) before dock stop pose (yields $\sim 1.0\text{ m}$ clearance to station) |
+| `standoff` | `0.8` | float | Frontal standoff distance ($\text{m}$) before dock stop pose |
 | `transit_lift_height`| `0.28` | float | Mast height ($\text{m}$) during transit ($40\text{ mm}$ clearance above $0.25\text{ m}$ station) |
 | `deposit_lift_height`| `0.21` | float | Mast height ($\text{m}$) for deposit (pallet settles on deck, forks float free) |
 | `dock_speed` | `0.12` | float | Docking reverse creep speed limit ($\text{m/s}$) |
 | `transit_speed` | `0.45` | float | Corridor cruising linear speed limit ($\text{m/s}$) |
-
----
-
-#### D. Milestone 1 Legacy Mission (`milestone1.launch`)
-Runs the 4-waypoint demonstration mission: $(4.0, 4.0, 270^\circ, \text{lift } 0.35\text{m}) \to (4.0, 0.0) \to (12.8, 0.0, 180^\circ, \text{lift } 0.20\text{m}) \to (12.0, 0.0)$.
-```bash
-roslaunch amr_navigation milestone1.launch
-```
+| `lift_speed` | `0.08` | float | Mast elevation vertical speed limit ($\text{m/s}$) |
 
 ---
 
