@@ -1,0 +1,4 @@
+# Measured from XStack prefab colliders; unloaded, ground-projected axle origin.
+robot_base_frame: drive_center
+footprint: [[0.37, 0.23], [-0.54, 0.23], [-0.54, -0.23], [0.37, -0.23]]
+footprint_padding: 0.02

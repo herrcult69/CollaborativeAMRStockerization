@@ -1,4 +1,7 @@
 <launch>
+    <!-- Use simulation time from Unity clock -->
+    <param name="/use_sim_time" value="true" />
+
     <!-- ROS-TCP-Endpoint server parameters -->
     <param name="ROS_IP" value="0.0.0.0"/>
     <param name="ROS_TCP_PORT" value="10000"/>

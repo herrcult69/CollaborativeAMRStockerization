@@ -16,10 +16,14 @@ acc_lim_x: 0.4
 acc_lim_y: 0.0
 acc_lim_trans: 0.4
 acc_lim_theta: 0.6
+
+# The threshold to estimate if the vehicle arrive at destination
 xy_goal_tolerance: 0.20
 yaw_goal_tolerance: 0.20
-trans_stopped_vel: 0.02
+
+trans_stopped_vel: 0.02 # Threshold to determine if the vehicle stop
 theta_stopped_vel: 0.03
+
 prune_plan: true
 sim_time: 2.0
 sim_granularity: 0.025
@@ -35,3 +39,24 @@ stop_time_buffer: 0.3
 scaling_speed: 0.20
 max_scaling_factor: 0.10
 use_dwa: true
+
+# For each period (10Hz) 
+# DWA :
+# Cửa sổ động (dynamic window): từ vận tốc hiện tại, tính các vận tốc đạt được trong một chu kỳ theo giới hạn gia tốc (acc_lim_x 0.4, acc_lim_theta 0.6), rồi cắt theo max/min_vel_*.
+# Lấy mẫu: vx_samples 10 × vth_samples 20, khoảng 200 cặp (v, ω).
+# Mô phỏng: với mỗi cặp, giả sử giữ nguyên trong sim_time 2.0 s, vẽ quỹ đạo (bước 2,5 cm). Đây là local_plan bạn thấy trong RViz.
+# Loại: quỹ đạo nào làm footprint chạm ô vật cản trong local costmap thì bị loại.
+# Chấm điểm các quỹ đạo còn lại, chọn cái chi phí thấp nhất:
+
+# cost = path_distance_bias (32) × khoảng cách tới đường NavFn
+#      + goal_distance_bias (20) × khoảng cách tới goal
+#      + occdist_scale     (0.1) × chi phí costmap lớn nhất dọc quỹ đạo
+# path_distance_bias cao hơn goal_distance_bias nghĩa là DWA ưu tiên bám đường NavFn. forward_point_distance 0.2 chấm điểm thêm một điểm 20 cm trước mũi xe, giúp xe quay đúng hướng.
+# Phát cặp (v, ω) thắng cuộc ra /cmd_vel.
+
+
+# DWA cannot be used for Docking
+# Reason: DWA allows ERRORS about 0.20m and 0.20 rad (~11 degree) --> the lift need for than that 
+# 2. Costmap. for move_base ==> rack and pallet is obstacle --> it wont reverse to take the package
+
+

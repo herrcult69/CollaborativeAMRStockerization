@@ -1,0 +1,6 @@
+<launch>
+  <param name="/use_sim_time" value="true" />
+
+  <!-- Milestone 1 Autonomous Pallet Stacker Mission -->
+  <node pkg="amr_navigation" type="milestone1_mission.py" name="milestone1_mission" output="screen" />
+</launch>

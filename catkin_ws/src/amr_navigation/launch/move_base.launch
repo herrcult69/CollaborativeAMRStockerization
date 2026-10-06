@@ -1,17 +1,16 @@
 <launch>
-    <!-- Arguments -->
+    <!-- Compatibility entry point; share the fully configured navigation launch. -->
+    <arg name="robot_profile" default="xstack" />
     <arg name="cmd_vel_topic" default="/cmd_vel" />
     <arg name="odom_topic" default="/odom" />
     <arg name="laser_topic" default="/scan" />
 
-    <!-- move_base node -->
-    <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
-        <!-- Local Planner selection: DWA or TEB -->
-        <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" />
-        
-        <!-- Remap topics -->
-        <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
-        <remap from="odom" to="$(arg odom_topic)"/>
-        <remap from="scan" to="$(arg laser_topic)"/>
-    </node>
+    <group>
+        <remap from="/cmd_vel" to="$(arg cmd_vel_topic)" />
+        <remap from="/odom" to="$(arg odom_topic)" />
+        <remap from="/scan" to="$(arg laser_topic)" />
+        <include file="$(find amr_navigation)/launch/warehouse_navigation.launch">
+            <arg name="robot_profile" value="$(arg robot_profile)" />
+        </include>
+    </group>
 </launch>
