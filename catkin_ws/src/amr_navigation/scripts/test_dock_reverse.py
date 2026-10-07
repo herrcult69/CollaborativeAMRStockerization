@@ -5,7 +5,7 @@ Test Pallet Staging & Reverse Docking Maneuver:
   2. Lower lift mast to entry height (-0.02m) so forks enter 60mm cavity cleanly
   3. Reverse straight back into pallet cavity accounting for 0.22m fork_offset from drive_center
   4. Elevate lift mast to safe under-rack height (+0.015m) to clear floor without hitting overhead beam
-  5. Pull straight forward (undock) to extract the double-stacked pallet out into the aisle
+  5. Pull straight forward (undock) to extract the pallet out into the aisle and raise mast to 0.15m
 """
 import math
 import rospy
@@ -27,7 +27,27 @@ def run_dock_test():
     pallet_y = float(rospy.get_param("~pallet_y", 5.0))
     dock_yaw = float(rospy.get_param("~dock_yaw", 270.0))  # degrees
     dock_speed = float(rospy.get_param("~dock_speed", 0.12))
-    perform_undock = bool(rospy.get_param("~perform_undock", True))
+
+    # Pickup level / height configuration (Standardized Option 1: Uniform 20mm Pallet Lift):
+    # "bottom" / "1": entry = -0.020m, pick = +0.010m (lifts pallet 20mm from floor; 12mm headroom under beam)
+    # "top" / "upper" / "2": entry = +0.240m, pick = +0.290m (lifts pallet 20mm from lower box; 12mm headroom under beam)
+    # "shelf" / "3": entry = +0.640m, pick = +0.685m (centers forks in 60mm hole; lifts pallet 20mm off shelf beam)
+    pick_level = str(rospy.get_param("~pick_level", "bottom")).strip().lower()
+    if pick_level in ("top", "upper", "2"):
+        default_entry = 0.240
+        default_pick = 0.290
+        open_aisle_transit = 0.290
+    elif pick_level in ("shelf", "3"):
+        default_entry = 0.640
+        default_pick = 0.685
+        open_aisle_transit = 0.280  # Lower down to stable carry height once clear of shelf
+    else:
+        default_entry = -0.020
+        default_pick = 0.010
+        open_aisle_transit = 0.150
+
+    entry_lift_height = float(rospy.get_param("~entry_lift_height", default_entry))
+    pick_lift_height = float(rospy.get_param("~pick_lift_height", default_pick))
 
     # Calculate required drive_center stopping pose so forks insert cleanly into pallet
     target_drive_x, target_drive_y = compute_dock_target_pose(
@@ -54,10 +74,11 @@ def run_dock_test():
     lift = LiftController(default_speed=0.06)
 
     rospy.loginfo("==================================================")
-    rospy.loginfo("STARTING PALLET STAGING, DOCKING & EXTRACTION TEST")
-    rospy.loginfo("Target Pallet Cavity      : (%.2f, %.2f) | Dock Yaw: %.1f deg", pallet_x, pallet_y, dock_yaw)
-    rospy.loginfo("Pre-Dock Staging Pose     : (%.2f, %.2f)", stage_x, stage_y)
-    rospy.loginfo("Fork Arm Lever Offset     : %.2fm (rearward from drive_center)", fork_offset)
+    rospy.loginfo("STARTING PALLET STAGING & REVERSE DOCKING TEST")
+    rospy.loginfo("Target Pallet Cavity        : (%.2f, %.2f) | Dock Yaw: %.1f deg", pallet_x, pallet_y, dock_yaw)
+    rospy.loginfo("Pickup Level Profile        : %s (Entry=%.3fm, Pick=%.3fm)", pick_level, entry_lift_height, pick_lift_height)
+    rospy.loginfo("Pre-Dock Staging Pose       : (%.2f, %.2f)", stage_x, stage_y)
+    rospy.loginfo("Fork Arm Lever Offset       : %.2fm (rearward from drive_center)", fork_offset)
     rospy.loginfo("Calculated drive_center Stop: (%.2f, %.2f)", target_drive_x, target_drive_y)
     rospy.loginfo("==================================================")
 
@@ -68,10 +89,10 @@ def run_dock_test():
         rospy.logwarn("Docking test aborted at Step 1.")
         return
 
-    # Step 2: Lower lift mast to entry height (-0.02m)
-    rospy.loginfo("\n>>> [STEP 2/5] Lowering lift mast to ground entry height (-0.02m)...")
-    rospy.loginfo("  [Forks positioned 30mm off floor -> slides into 60mm cavity with 10mm ceiling margin]")
-    lift.set_height(-0.02, speed=0.06)
+    # Step 2: Position lift mast to pocket entry height
+    rospy.loginfo("\n>>> [STEP 2/5] Positioning lift mast to entry height (%.3fm) [Level: %s]...",
+                  entry_lift_height, pick_level)
+    lift.set_height(entry_lift_height, speed=0.06)
 
     # Step 3: Precision straight-line reverse docking
     rospy.loginfo("\n>>> [STEP 3/5] Reversing straight into Pallet at (%.2f, %.2f)...", pallet_x, pallet_y)
@@ -88,33 +109,32 @@ def run_dock_test():
         rospy.logwarn("Docking test aborted at Step 3.")
         return
 
-    # Step 4: Under-rack extraction lift (+0.015m)
-    rospy.loginfo("\n>>> [STEP 4/5] Elevating mast to +0.015m (Under-Rack Safe Headroom)...")
-    rospy.loginfo("  [Lifts pallet ~25mm off floor; preserves ~17mm headroom below 0.592m overhead beam]")
-    lift.set_height(0.015, speed=0.04)
+    # Step 4: Under-rack extraction lift
+    rospy.loginfo("\n>>> [STEP 4/5] Elevating mast to Under-Rack Pick Height (%.3fm)...", pick_lift_height)
+    rospy.loginfo("  [Lifts pallet off support while preserving overhead clearance]")
+    lift.set_height(pick_lift_height, speed=0.04)
 
-    # Step 5: Undock / extract pallet out of rack
-    if perform_undock:
-        rospy.loginfo("\n>>> [STEP 5/5] Extracting pallet straight forward out of rack...")
-        ok = dock.undock(
-            target_x=stage_x,
-            target_y=stage_y,
-            dock_yaw=dock_yaw,
-            speed=0.10,
-            pos_tolerance=0.05,
-            label="Rack Extraction"
-        )
-        if not ok or rospy.is_shutdown():
-            rospy.logwarn("Docking test aborted at Step 5.")
-            return
+    # Step 5: Pull straight forward (undock) to extract the pallet out into the aisle
+    rospy.loginfo("\n>>> [STEP 5/5] Extracting pallet straight forward out of rack...")
+    ok = dock.undock(
+        target_x=stage_x,
+        target_y=stage_y,
+        dock_yaw=dock_yaw,
+        speed=0.10,
+        pos_tolerance=0.05,
+        label="Rack Extraction"
+    )
+    if not ok or rospy.is_shutdown():
+        rospy.logwarn("Docking test aborted at Step 5.")
+        return
 
-        # Open-aisle safety elevation
-        rospy.loginfo("Pallet clear of rack. Elevating to transit height (0.15m)...")
-        lift.set_height(0.15, speed=0.06)
+    # Position lift for open-aisle transit
+    rospy.loginfo("Pallet clear of rack. Positioning to open-aisle transit height (%.3fm)...", open_aisle_transit)
+    lift.set_height(open_aisle_transit, speed=0.06)
 
     rospy.loginfo("\n==================================================")
-    rospy.loginfo("SUCCESS: PALLET DOCKING & UNDER-RACK EXTRACTION COMPLETE!")
-    rospy.loginfo("Double-stacked pallet safely extracted into open aisle.")
+    rospy.loginfo("SUCCESS: PALLET DOCKING & RACK EXTRACTION COMPLETE!")
+    rospy.loginfo("Pallet safely extracted into open aisle at height %.3fm.", open_aisle_transit)
     rospy.loginfo("==================================================")
 
 
