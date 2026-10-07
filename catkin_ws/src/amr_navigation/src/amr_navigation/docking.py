@@ -44,6 +44,30 @@ def compute_dock_target_pose(pallet_x, pallet_y, dock_yaw_deg, fork_offset=0.22)
 compute_dock_base_pose = compute_dock_target_pose
 
 
+def reverse_line_command(x, y, yaw, tx, ty, line_yaw, v_max, k_lat=2.5, max_tilt=math.radians(10.0)):
+    """
+    Control law for reversing onto the pallet axis: the line through (tx, ty) along line_yaw.
+
+    Reversing gives d(e_lat)/dt = v * sin(e_yaw) with v < 0, so a small tilt of
+    atan(k_lat * e_lat) toward the offset side brings drive_center back onto the axis;
+    the tilt itself vanishes as e_lat -> 0, leaving the robot straight.
+
+    :return: (v, w, along, e_lat, e_yaw); along > 0 while the target is still behind the robot,
+             e_lat > 0 when drive_center is left of the axis (seen facing line_yaw).
+    """
+    ux, uy = math.cos(line_yaw), math.sin(line_yaw)
+    rx, ry = x - tx, y - ty
+    along = rx * ux + ry * uy
+    e_lat = -rx * uy + ry * ux
+    e_yaw = normalize_angle(yaw - line_yaw)
+    yaw_des = max(-max_tilt, min(max_tilt, math.atan(k_lat * e_lat)))
+    # Minimum creep of 0.07 m/s breaks Unity wheel stiction cleanly
+    v = -min(v_max, max(0.07, 0.70 * abs(along)))
+    # Tight clamp so the robot cannot swing the forks sideways
+    w = max(-0.18, min(0.18, 1.6 * (yaw_des - e_yaw)))
+    return v, w, along, e_lat, e_yaw
+
+
 class PalletDockingController:
     """
     Precision Pallet Docking Controller.
@@ -87,18 +111,25 @@ class PalletDockingController:
         cmd = Twist()
         self.pub.publish(cmd)
 
-    def dock_reverse(self, target_x, target_y, dock_yaw=None, speed=None, pos_tolerance=None, label="Pallet Insertion", fork_offset=0.0):
+    def dock_reverse(self, target_x, target_y, dock_yaw=None, speed=None, pos_tolerance=None, label="Pallet Insertion", fork_offset=0.0,
+                     entry_lat_tol=None, entry_along=0.50, fork_tip=0.54, retries=2):
         """
-        Reverse straight back into the pallet pocket towards (target_x, target_y).
-        Locks heading to dock_yaw and forbids in-place spinning to prevent striking pallet legs.
+        Reverse into the pallet pocket towards (target_x, target_y), steering drive_center onto
+        the pallet axis (dock_yaw through the target) and forbidding in-place spinning.
 
         :param target_x: Goal X (drive_center) inside pallet cavity (meters)
         :param target_y: Goal Y (drive_center) inside pallet cavity (meters)
-        :param dock_yaw: Locked orientation in degrees (e.g. 270.0). If None, uses initial heading.
+        :param dock_yaw: Pallet axis orientation in degrees (e.g. 270.0). If None, uses initial heading.
         :param speed: Max reverse speed in m/s (default: 0.08 m/s = 8 cm/s)
         :param pos_tolerance: Insertion depth tolerance in meters (default: 0.03 m = 3 cm)
         :param label: Logging descriptor
         :param fork_offset: Lever arm offset in meters from drive_center to fork center along rear -X axis (default: 0.0)
+        :param entry_lat_tol: If set, lateral limit (m) for drive_center and fork tips when the tips reach the
+                              pocket, and for the final pose; a miss pulls forward and retries. None disables.
+        :param entry_along: Remaining travel (m) at which the fork tips reach the pocket face.
+                            Milestone_1 pallet: 0.54 tip + 0.175 half depth - 0.22 fork_offset ~= 0.50.
+        :param fork_tip: Distance (m) from drive_center back to the fork tips.
+        :param retries: Pull-out-and-retry attempts after a failed entry check.
         """
         tx = float(target_x)
         ty = float(target_y)
@@ -135,6 +166,10 @@ class PalletDockingController:
         if locked_yaw_rad is None:
             locked_yaw_rad = sample[2]
 
+        start_x, start_y = sample[0], sample[1]
+        entry_checked = False
+        attempts = 0
+
         while not rospy.is_shutdown():
             with self.lock:
                 sample = self.sample
@@ -154,40 +189,48 @@ class PalletDockingController:
                 rospy.logerr("[Docking] Odometry timeout. Stopped.")
                 return False
 
-            dx = tx - x
-            dy = ty - y
-            dist_to_dock = math.hypot(dx, dy)
+            dist_to_dock = math.hypot(tx - x, ty - y)
+            v_cmd, w_cmd, along, e_lat, e_yaw = reverse_line_command(x, y, yaw, tx, ty, locked_yaw_rad, v_max)
 
-            # Heading error relative to locked pallet tunnel axis
-            yaw_err = normalize_angle(locked_yaw_rad - yaw)
-
-            # Longitudinal distance along robot's current heading
-            # (Negative when target is behind the robot)
-            d_long = dx * math.cos(yaw) + dy * math.sin(yaw)
-
-            # Check if arrived within tolerance (or if robot passed the target depth)
-            if dist_to_dock <= tol or d_long >= 0.0:
+            # Arrived within tolerance, or reached the target depth along the pallet axis
+            if dist_to_dock <= tol or along <= 0.0:
                 for _ in range(6):
                     self.stop()
                     time.sleep(0.04)
-                rospy.loginfo(">>> PALLET DOCK COMPLETE: %s at (%.3f, %.3f), Yaw: %.2f deg (Dist: %.3fm)",
-                              label, x, y, math.degrees(yaw), dist_to_dock)
-                return True
+                ok = entry_lat_tol is None or abs(e_lat) <= entry_lat_tol
+                log = rospy.loginfo if ok else rospy.logerr
+                log(">>> PALLET DOCK %s: %s at (%.3f, %.3f), Yaw: %.2f deg (Dist: %.3fm | Lateral: %+.1fmm | YawErr: %+.2f deg)",
+                    "COMPLETE" if ok else "FAILED (lateral offset)", label, x, y, math.degrees(yaw),
+                    dist_to_dock, e_lat * 1000.0, math.degrees(e_yaw))
+                return ok
 
-            # Controlled reverse velocity (smoothly slow down as target depth nears)
-            # Minimum creep of 0.07 m/s (7 cm/s) breaks Unity wheel stiction cleanly
-            v_cmd = -min(v_max, max(0.07, 0.70 * abs(d_long)))
-
-            # Active heading stabilization (tight clamp so robot cannot swing forks sideways)
-            w_cmd = max(-0.18, min(0.18, 1.6 * yaw_err))
+            # Entry gate: fork tips are about to reach the pallet pocket
+            if entry_lat_tol is not None and not entry_checked and along <= entry_along:
+                tip_lat = e_lat - fork_tip * math.sin(e_yaw)
+                # Both fork ends inside the tolerance => the whole tine is (yaw is implied)
+                if max(abs(e_lat), abs(tip_lat)) <= entry_lat_tol:
+                    entry_checked = True
+                    rospy.loginfo("[%s] Entry check passed: Lateral %+.1fmm | Tips %+.1fmm | YawErr %+.2f deg",
+                                  label, e_lat * 1000.0, tip_lat * 1000.0, math.degrees(e_yaw))
+                else:
+                    self.stop()
+                    rospy.logwarn("[%s] Entry check failed: Lateral %+.1fmm | Tips %+.1fmm | YawErr %+.2f deg (attempt %d/%d)",
+                                  label, e_lat * 1000.0, tip_lat * 1000.0, math.degrees(e_yaw), attempts + 1, retries + 1)
+                    if attempts >= retries:
+                        return False
+                    attempts += 1
+                    # Pull forward to where this approach started, then reverse again
+                    if not self.undock(start_x, start_y, dock_yaw=math.degrees(locked_yaw_rad), label=label + " Retry Pull-out"):
+                        return False
+                    continue
 
             cmd = Twist()
             cmd.linear.x = v_cmd
             cmd.angular.z = w_cmd
             self.pub.publish(cmd)
 
-            rospy.loginfo_throttle(1, "[%s] Dist: %.3fm (Long: %.3fm) | V: %.2fm/s | YawErr: %.1f deg",
-                                   label, dist_to_dock, d_long, v_cmd, math.degrees(yaw_err))
+            rospy.loginfo_throttle(1, "[%s] Remaining: %.3fm | Lateral: %+.1fmm | YawErr: %+.1f deg | V: %.2fm/s",
+                                   label, along, e_lat * 1000.0, math.degrees(e_yaw), v_cmd)
 
             rate.sleep()
 

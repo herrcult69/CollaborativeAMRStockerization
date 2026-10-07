@@ -89,8 +89,8 @@ def run_mission():
         dock_yaw_deg=dock_yaw,
         fork_offset=fork_offset
     )
-    stage_rack_x = target_rack_x + 0.8 * math.cos(math.radians(dock_yaw))
-    stage_rack_y = target_rack_y + 0.8 * math.sin(math.radians(dock_yaw))
+    stage_rack_x = target_rack_x + 1.2 * math.cos(math.radians(dock_yaw))
+    stage_rack_y = target_rack_y + 1.2 * math.sin(math.radians(dock_yaw))
 
     # 2. Calculate Staging Station Deposit Poses:
     # Stop pose: drive_center stops at station_x + fork_offset * cos(yaw) = 13.0 - 0.22 = 12.78m
@@ -148,6 +148,7 @@ def run_mission():
             dock_yaw=dock_yaw,
             speed=dock_speed,
             pos_tolerance=0.04,
+            entry_lat_tol=0.008,  # ~10 mm fork-to-block clearance per side
             label="Rack Insertion"
         )
         if not ok or rospy.is_shutdown():

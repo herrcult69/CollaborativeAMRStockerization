@@ -13,7 +13,7 @@ if os.path.isdir(_pkg_src) and _pkg_src not in sys.path:
     sys.path.insert(0, _pkg_src)
 
 from amr_navigation.move_to_point import normalize_angle, deg_to_rad
-from amr_navigation.docking import PalletDockingController, compute_dock_target_pose, compute_dock_base_pose
+from amr_navigation.docking import PalletDockingController, compute_dock_target_pose, compute_dock_base_pose, reverse_line_command
 
 
 class PalletDockingTests(unittest.TestCase):
@@ -79,6 +79,28 @@ class PalletDockingTests(unittest.TestCase):
         d_long_close = -0.05
         v_cmd_close = -min(v_max, max(0.04, 0.45 * abs(d_long_close)))
         self.assertEqual(v_cmd_close, -0.04)
+
+    def test_reverse_line_command_passes_entry_gate(self):
+        # Replays the measured Milestone_1 staging error (3.1 cm, 3.9 deg) and its mirror image.
+        # Unity under-rotates (~0.85x commanded yaw rate), so the plant model does too.
+        tx, ty, line_yaw = 4.0, 4.78, deg_to_rad(270.0)
+        for x0, yaw0_deg in ((3.969, -86.13), (4.031, -93.87)):
+            x, y, yaw = x0, ty + 1.2 * math.sin(line_yaw), math.radians(yaw0_deg)  # 1.2 m standoff
+            gate = None
+            for _ in range(2000):
+                v, w, along, e_lat, e_yaw = reverse_line_command(x, y, yaw, tx, ty, line_yaw, 0.12)
+                if gate is None and along <= 0.50:
+                    gate = (e_lat, e_lat - 0.54 * math.sin(e_yaw), e_yaw)
+                if along <= 0.0:
+                    break
+                yaw += 0.85 * w * 0.05
+                x += v * math.cos(yaw) * 0.05
+                y += v * math.sin(yaw) * 0.05
+            self.assertIsNotNone(gate)
+            e_lat_gate, tip_lat_gate, _ = gate
+            self.assertLess(abs(e_lat_gate), 0.008)
+            self.assertLess(abs(tip_lat_gate), 0.008)
+            self.assertLess(abs(e_lat), 0.005)
 
     def test_staging_station_dropoff_clearances(self):
         # 25cm tall staging station

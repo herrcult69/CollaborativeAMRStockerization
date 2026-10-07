@@ -57,17 +57,17 @@ def run_dock_test():
         fork_offset=fork_offset
     )
 
-    # Pre-dock staging waypoint: 0.8m standoff in front along heading (or custom param)
+    # Pre-dock staging waypoint: 1.2m standoff in front along heading (or custom param)
     raw_stage_x = rospy.get_param("~stage_x", None)
     raw_stage_y = rospy.get_param("~stage_y", None)
     if raw_stage_x is not None:
         stage_x = float(raw_stage_x)
     else:
-        stage_x = target_drive_x + 0.8 * math.cos(math.radians(dock_yaw))
+        stage_x = target_drive_x + 1.2 * math.cos(math.radians(dock_yaw))
     if raw_stage_y is not None:
         stage_y = float(raw_stage_y)
     else:
-        stage_y = target_drive_y + 0.8 * math.sin(math.radians(dock_yaw))
+        stage_y = target_drive_y + 1.2 * math.sin(math.radians(dock_yaw))
 
     nav = MoveToPointController(max_linear=0.35, max_angular=0.65)
     dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04)
@@ -103,6 +103,7 @@ def run_dock_test():
         dock_yaw=dock_yaw,
         speed=dock_speed,
         pos_tolerance=0.04,
+        entry_lat_tol=0.008,  # ~10 mm fork-to-block clearance per side
         label="Pallet Insertion"
     )
     if not ok or rospy.is_shutdown():
