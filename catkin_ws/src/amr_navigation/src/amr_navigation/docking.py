@@ -44,6 +44,18 @@ def compute_dock_target_pose(pallet_x, pallet_y, dock_yaw_deg, fork_offset=0.22)
 compute_dock_base_pose = compute_dock_target_pose
 
 
+def compute_prestage_pose(stage_x, stage_y, dock_yaw_deg, approach=0.6):
+    """
+    move_base goal handed over to MoveToPoint: `approach` m further along the dock heading,
+    nose turned back toward the stage, so MoveToPoint only drives straight then turns once.
+    :return: (x, y, yaw_deg)
+    """
+    yaw_rad = deg_to_rad(dock_yaw_deg)
+    return (float(stage_x) + approach * math.cos(yaw_rad),
+            float(stage_y) + approach * math.sin(yaw_rad),
+            (float(dock_yaw_deg) + 180.0) % 360.0)
+
+
 def reverse_line_command(x, y, yaw, tx, ty, line_yaw, v_max, k_lat=2.5, max_tilt=math.radians(10.0)):
     """
     Control law for reversing onto the pallet axis: the line through (tx, ty) along line_yaw.

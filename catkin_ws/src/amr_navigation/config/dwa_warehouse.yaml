@@ -6,16 +6,18 @@ min_vel_x: 0.0
 max_vel_y: 0.0
 min_vel_y: 0.0
 max_vel_trans: 0.25
-# At rest, acc_lim_x / controller_frequency = 0.04 m/s.
-# Keep an admissible initial sample; raising this alone to 0.10 rejects
-# all startup samples with the current angular limits as well.
+# At rest the dynamic window tops out at acc_lim / controller_frequency.
+# 0.4 / 0.6 gave 0.04 m/s and 0.06 rad/s: inside Unity's dead zone (robot never
+# starts, window never grows; bag 2026-10-09: 16% of the rack leg stuck) and
+# 0.06 < min_vel_theta, so no in-place turn was admissible from rest.
+# 1.0 / 2.0 -> 0.10 m/s and 0.20 rad/s. These are planner assumptions; Unity sets real accel.
 min_vel_trans: 0.03
 max_vel_theta: 0.45
 min_vel_theta: 0.08
-acc_lim_x: 0.4
+acc_lim_x: 1.0
 acc_lim_y: 0.0
-acc_lim_trans: 0.4
-acc_lim_theta: 0.6
+acc_lim_trans: 1.0
+acc_lim_theta: 2.0
 
 # The threshold to estimate if the vehicle arrive at destination
 xy_goal_tolerance: 0.20
@@ -42,7 +44,7 @@ use_dwa: true
 
 # For each period (10Hz) 
 # DWA :
-# Cửa sổ động (dynamic window): từ vận tốc hiện tại, tính các vận tốc đạt được trong một chu kỳ theo giới hạn gia tốc (acc_lim_x 0.4, acc_lim_theta 0.6), rồi cắt theo max/min_vel_*.
+# Cửa sổ động (dynamic window): từ vận tốc hiện tại, tính các vận tốc đạt được trong một chu kỳ theo giới hạn gia tốc (acc_lim_x 1.0, acc_lim_theta 2.0), rồi cắt theo max/min_vel_*.
 # Lấy mẫu: vx_samples 10 × vth_samples 20, khoảng 200 cặp (v, ω).
 # Mô phỏng: với mỗi cặp, giả sử giữ nguyên trong sim_time 2.0 s, vẽ quỹ đạo (bước 2,5 cm). Đây là local_plan bạn thấy trong RViz.
 # Loại: quỹ đạo nào làm footprint chạm ô vật cản trong local costmap thì bị loại.

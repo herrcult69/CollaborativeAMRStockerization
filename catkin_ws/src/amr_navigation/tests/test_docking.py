@@ -13,7 +13,7 @@ if os.path.isdir(_pkg_src) and _pkg_src not in sys.path:
     sys.path.insert(0, _pkg_src)
 
 from amr_navigation.move_to_point import normalize_angle, deg_to_rad
-from amr_navigation.docking import PalletDockingController, compute_dock_target_pose, compute_dock_base_pose, reverse_line_command
+from amr_navigation.docking import PalletDockingController, compute_dock_target_pose, compute_dock_base_pose, reverse_line_command, compute_prestage_pose
 
 
 class PalletDockingTests(unittest.TestCase):
@@ -101,6 +101,18 @@ class PalletDockingTests(unittest.TestCase):
             self.assertLess(abs(e_lat_gate), 0.008)
             self.assertLess(abs(tip_lat_gate), 0.008)
             self.assertLess(abs(e_lat), 0.005)
+
+    def test_prestage_faces_stage(self):
+        # Rack stage (4.00, 3.58) docking at 270 deg -> pre-stage below it, nose up toward the rack
+        x, y, yaw = compute_prestage_pose(4.0, 3.58, 270.0, approach=0.6)
+        self.assertAlmostEqual(x, 4.0, places=4)
+        self.assertAlmostEqual(y, 2.98, places=4)
+        self.assertAlmostEqual(yaw, 90.0, places=4)
+        # Station stage (12.10, 0.0) docking at 180 deg -> pre-stage west of it, nose east
+        x, y, yaw = compute_prestage_pose(12.10, 0.0, 180.0, approach=0.6)
+        self.assertAlmostEqual(x, 11.50, places=4)
+        self.assertAlmostEqual(y, 0.0, places=4)
+        self.assertAlmostEqual(yaw, 0.0, places=4)
 
     def test_staging_station_dropoff_clearances(self):
         # 25cm tall staging station
