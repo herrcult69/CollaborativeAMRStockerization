@@ -1,6 +1,59 @@
 <launch>
-  <!-- Milestone 2: move_base drives the long legs, precision controllers do staging and docking.
-       Prerequisites: unity_bridge, laser_tf, warehouse_localization, warehouse_navigation. -->
+<!--
+  =============================================================================
+  MILESTONE 2: HYBRID AUTONOMOUS NAVIGATION & PRECISION DOCKING MISSION
+  =============================================================================
+  Combines move_base (global DWA planner) for obstacle-avoiding corridor navigation
+  with specialized controllers for millimeter-precision staging, mast lift & docking:
+    1. move_base   : Navigates from spawn to Rack Pre-Stage waypoint (approach m before stage)
+    2. MoveToPoint : Finalizes straight alignment onto rack axis at stage pose
+    3. Mast Lift   : Positions forks to entry height (-0.020m / +0.240m / +0.640m)
+    4. dock_reverse: Reverses into pallet cavity (drive_center stops at 4.0, 4.78)
+    5. Pallet Lift : Uniform 20mm lift (+0.010m / +0.290m / +0.685m)
+    6. undock      : Pulls forward out of rack to pre-dock staging pose
+    7. Transit Lift: Elevates mast to 0.28m (clears 0.25m staging station deck)
+    8. move_base   : Navigates warehouse corridor highway to Station Pre-Stage pose
+    9. MoveToPoint : Finalizes straight alignment facing 180.0 deg (West) at station standoff
+   10. dock_reverse: Reverses over 25cm station to deposit stop pose (12.90, 0.0)
+   11. Mast Lower  : Lowers mast to 0.21m (pallet touches down at 0.24m, forks float free)
+   12. undock      : Extracts forks forward to standoff & homes mast to 0.0m
+
+  PREREQUISITES:
+    Ensure warehouse_autonav.launch (or localization + navigation) is running first!
+
+  ARGUMENTS:
+    pick_level          : "bottom" / "1" (floor stack), "top" / "2" (upper stack), "shelf" / "3" (tier 2)
+    pallet_x, pallet_y  : Target rack pallet cavity coordinates (default: 4.0, 5.0)
+    dock_yaw            : Approach heading in degrees (270.0 for North racks, 90.0 for South shelves)
+    fork_offset         : Drive center to tine reference offset (default: 0.22m)
+    rack_standoff       : Pre-dock runway distance for rack entry (default: 1.2m)
+    station_x, y        : Staging station deck position (default: 13.12, 0.0)
+    station_yaw         : Heading for station deposit (default: 180.0 deg)
+    standoff            : Pre-dock standoff distance from station dock (default: 0.8m)
+    approach            : Handover margin from move_base goal to stage pose (default: 0.6m)
+    move_base_timeout   : Timeout in seconds for move_base action goals (default: 180.0s)
+    skip_pickup         : Set true if robot already carries a pallet (starts directly at transit)
+    transit_speed       : Max cruising linear velocity (default: 0.45 m/s)
+    dock_speed          : Max creep docking velocity (default: 0.12 m/s)
+    lift_speed          : Mast elevation velocity (default: 0.08 m/s)
+
+  COMMON USAGE EXAMPLES:
+    # 1. Standard Milestone 2 pick-and-deliver mission:
+    roslaunch amr_navigation milestone2.launch
+
+    # 2. Pick upper pallet of double-stack:
+    roslaunch amr_navigation milestone2.launch pick_level:=top
+
+    # 3. Pick from second-tier elevated rack shelf:
+    roslaunch amr_navigation milestone2.launch pick_level:=shelf
+
+    # 4. Pick from opposite-side shelf (facing 90 deg North):
+    roslaunch amr_navigation milestone2.launch pallet_x:=4.0 pallet_y:=-5.0 dock_yaw:=90.0
+
+    # 5. Skip pickup (start with pallet loaded, deliver to station):
+    roslaunch amr_navigation milestone2.launch skip_pickup:=true
+  =============================================================================
+-->
   <param name="/use_sim_time" value="true" />
 
   <arg name="skip_pickup" default="false" />
@@ -9,6 +62,7 @@
   <arg name="pallet_y" default="5.0" />
   <arg name="dock_yaw" default="270.0" />
   <arg name="fork_offset" default="0.22" />
+  <arg name="rack_standoff" default="1.2" />
 
   <arg name="station_x" default="13.12" />
   <arg name="station_y" default="0.0" />
@@ -34,6 +88,7 @@
     <param name="pallet_y" value="$(arg pallet_y)" />
     <param name="dock_yaw" value="$(arg dock_yaw)" />
     <param name="fork_offset" value="$(arg fork_offset)" />
+    <param name="rack_standoff" value="$(arg rack_standoff)" />
     <param name="station_x" value="$(arg station_x)" />
     <param name="station_y" value="$(arg station_y)" />
     <param name="station_yaw" value="$(arg station_yaw)" />

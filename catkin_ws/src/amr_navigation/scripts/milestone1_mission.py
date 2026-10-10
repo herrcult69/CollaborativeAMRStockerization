@@ -9,10 +9,10 @@ Full End-to-End Pick-and-Place Mission Pipeline:
   4. Elevate lift mast to safe under-rack height (+0.015m, 17mm headroom below 0.592m beam)
   5. Pull straight forward out of rack (rack extraction / undock)
   6. Elevate lift mast to transit height (0.28m, 40mm clearance above 25cm staging station)
-  7. Follow Manhattan orthogonal corridor: (4.0, 5.0) -> (4.0, 0.0) -> (11.98, 0.0), align 180 deg
-  8. Precision reverse docking over the 25cm staging station to stop pose (12.78, 0.0)
+  7. Follow Manhattan orthogonal corridor: (4.0, 5.0) -> (4.0, 0.0) -> (12.10, 0.0), align 180 deg
+  8. Precision reverse docking over the 25cm staging station to stop pose (12.90, 0.0)
   9. Lower mast to deposit height (0.21m) - pallet settles on station deck, forks float free
-  10. Pull straight forward to staging standoff (11.98, 0.0), cleanly extracting forks
+  10. Pull straight forward to staging standoff (12.10, 0.0), cleanly extracting forks
   11. Lower mast to idle/transit height (0.00m) - Mission Complete!
 """
 import math
@@ -33,16 +33,18 @@ def run_mission():
     pallet_y = float(rospy.get_param("~pallet_y", 5.0))
     dock_yaw = float(rospy.get_param("~dock_yaw", 270.0))  # degrees
     fork_offset = float(rospy.get_param("~fork_offset", 0.22))  # deep tine penetration (85-90%)
+    rack_standoff = float(rospy.get_param("~rack_standoff", 1.2))  # Standoff in front of rack dock pose
 
     # Transit & Highway Waypoints (Orthogonal routing strictly avoids diagonal blockage)
     corridor_x = float(rospy.get_param("~corridor_x", 4.0))
     corridor_y = float(rospy.get_param("~corridor_y", 0.0))
 
-    # Staging Station / Stocker Target (Located at X=13.0, Y=0.0, 25cm tall)
-    station_x = float(rospy.get_param("~station_x", 13.0))
+    # Staging Station / Stocker Target (Located at X=13.12, Y=0.0, 25cm tall)
+    station_x = float(rospy.get_param("~station_x", 13.12))
     station_y = float(rospy.get_param("~station_y", 0.0))
     station_yaw = float(rospy.get_param("~station_yaw", 180.0))  # Facing West, rear pointing East into dock
-    standoff = float(rospy.get_param("~standoff", 0.8))  # Standoff in front of drive_stop pose
+    station_standoff = float(rospy.get_param("~station_standoff", rospy.get_param("~standoff", 0.8)))  # Standoff in front of drive_stop pose
+    standoff = station_standoff  # Alias for backward compatibility
 
     # Kinematic Speeds
     dock_speed = float(rospy.get_param("~dock_speed", 0.12))
@@ -89,11 +91,11 @@ def run_mission():
         dock_yaw_deg=dock_yaw,
         fork_offset=fork_offset
     )
-    stage_rack_x = target_rack_x + 1.2 * math.cos(math.radians(dock_yaw))
-    stage_rack_y = target_rack_y + 1.2 * math.sin(math.radians(dock_yaw))
+    stage_rack_x = target_rack_x + rack_standoff * math.cos(math.radians(dock_yaw))
+    stage_rack_y = target_rack_y + rack_standoff * math.sin(math.radians(dock_yaw))
 
     # 2. Calculate Staging Station Deposit Poses:
-    # Stop pose: drive_center stops at station_x + fork_offset * cos(yaw) = 13.0 - 0.22 = 12.78m
+    # Stop pose: drive_center stops at station_x + fork_offset * cos(yaw) = 13.12 - 0.22 = 12.90m
     target_deposit_x, target_deposit_y = compute_dock_target_pose(
         pallet_x=station_x,
         pallet_y=station_y,
@@ -102,9 +104,9 @@ def run_mission():
     )
 
     # Pre-dock staging pose: standoff distance in front of stop pose along heading
-    # stage_x = 12.78 + 0.8 * (-1.0) = 11.98m (~12.0m) -> 1.0m clearance in front of dock
-    stage_station_x = target_deposit_x + standoff * math.cos(math.radians(station_yaw))
-    stage_station_y = target_deposit_y + standoff * math.sin(math.radians(station_yaw))
+    # stage_x = 12.90 + 0.8 * (-1.0) = 12.10m (~12.1m) -> ~1.0m clearance in front of dock
+    stage_station_x = target_deposit_x + station_standoff * math.cos(math.radians(station_yaw))
+    stage_station_y = target_deposit_y + station_standoff * math.sin(math.radians(station_yaw))
 
     retreat_x = stage_station_x  # Undock extracts back to pre-dock standoff
 

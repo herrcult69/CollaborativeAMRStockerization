@@ -59,6 +59,7 @@ def run_mission():
     station_y = float(rospy.get_param("~station_y", 0.0))
     station_yaw = float(rospy.get_param("~station_yaw", 180.0))
     standoff = float(rospy.get_param("~standoff", 0.8))
+    rack_standoff = float(rospy.get_param("~rack_standoff", 1.2))
 
     # Distance from stage to the move_base goal; MoveToPoint drives this last stretch straight
     approach = float(rospy.get_param("~approach", 0.6))
@@ -86,10 +87,10 @@ def run_mission():
         TRANSIT_LIFT_HEIGHT = float(raw_transit)
     DEPOSIT_LIFT_HEIGHT = float(rospy.get_param("~deposit_lift_height", 0.21))
 
-    # Rack poses: dock target -> stage (1.2 m standoff) -> pre-stage
+    # Rack poses: dock target -> stage (rack_standoff) -> pre-stage
     target_rack_x, target_rack_y = compute_dock_target_pose(pallet_x, pallet_y, dock_yaw, fork_offset)
-    stage_rack_x = target_rack_x + 1.2 * math.cos(math.radians(dock_yaw))
-    stage_rack_y = target_rack_y + 1.2 * math.sin(math.radians(dock_yaw))
+    stage_rack_x = target_rack_x + rack_standoff * math.cos(math.radians(dock_yaw))
+    stage_rack_y = target_rack_y + rack_standoff * math.sin(math.radians(dock_yaw))
     pre_rack = compute_prestage_pose(stage_rack_x, stage_rack_y, dock_yaw, approach)
 
     # Station poses

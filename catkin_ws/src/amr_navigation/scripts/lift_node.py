@@ -5,7 +5,7 @@ ROS CLI node wrapper around amr_navigation.lift.LiftController.
 
 Usage:
   rosrun amr_navigation lift_node.py 0.35
-  rosrun amr_navigation lift_node.py _height:=0.35 _speed:=0.06
+  rosrun amr_navigation lift_node.py _height:=0.35 _lift_speed:=0.08
 """
 import sys
 import rospy
@@ -26,7 +26,7 @@ def main():
     else:
         target_height = float(rospy.get_param("~height", 0.25))
 
-    speed = float(rospy.get_param("~speed", 0.06))
+    speed = float(rospy.get_param("~lift_speed", rospy.get_param("~speed", 0.08)))
     lift = LiftController(default_speed=speed)
     rospy.sleep(0.2)
     lift.set_height(target_height)
