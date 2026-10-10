@@ -1,4 +1,36 @@
 <launch>
+<!--
+  =============================================================================
+  MOVE TO POINT: 3-PHASE CLOSED-LOOP WAYPOINT NAVIGATION
+  =============================================================================
+  Commands the robot chassis to any (x, y) coordinate and aligns to goal_yaw
+  using a deterministic 3-phase state machine:
+    Phase 1: ALIGN_TO_GOAL   - Rotates in-place until heading error < 12 deg
+    Phase 2: DRIVE_TO_GOAL   - Drives forward with proportional speed + heading hold
+                               (re-aligns if heading drifts > 37 deg)
+    Phase 3: ALIGN_FINAL_YAW - Rotates in-place to goal_yaw upon arrival
+                               (recovers if position drifts > 1.6x tolerance)
+    * Features automatic anti-stiction dither pulses (+0.18 rad/s) to overcome tire scrub.
+
+  ARGUMENTS:
+    goal_x, goal_y      : Target position in meters (drive_center frame)
+    goal_yaw            : Target heading in degrees (0.0=East, 90.0=North, 180.0=West, 270.0=South)
+    pos_tolerance       : Linear arrival tolerance in meters (default: 0.05m = 5cm)
+    yaw_tolerance       : Final heading accuracy tolerance in degrees (default: 4.0 deg)
+    max_linear          : Maximum cruising linear velocity (default: 0.35 m/s)
+    max_angular         : Maximum in-place turning velocity (default: 0.65 rad/s)
+
+  COMMON USAGE EXAMPLES:
+    # 1. Default drive (2m forward to x=2.0m, y=0.0m, yaw=0.0 deg):
+    roslaunch amr_navigation move_to_point.launch
+
+    # 2. Drive to corridor junction at (4.0m, 0.0m) and face North (90 deg):
+    roslaunch amr_navigation move_to_point.launch goal_x:=4.0 goal_y:=0.0 goal_yaw:=90.0
+
+    # 3. Precision docking staging approach at (4.0m, 3.58m) facing South (270 deg):
+    roslaunch amr_navigation move_to_point.launch goal_x:=4.0 goal_y:=3.58 goal_yaw:=270.0 pos_tolerance:=0.04 yaw_tolerance:=3.0
+  =============================================================================
+-->
   <param name="/use_sim_time" value="true" />
 
   <!-- Target pose and precision parameters (Meters & Degrees) -->
