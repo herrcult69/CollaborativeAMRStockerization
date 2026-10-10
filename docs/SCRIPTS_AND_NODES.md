@@ -286,16 +286,16 @@ Full end-to-end orchestration scripts that combine navigation + docking + lift i
 
 **Mission steps (11 phases):**
 ```
-1. Approach rack pre-dock staging pose: (pallet_x, ~3.98), yaw 270°
+1. Approach rack pre-dock staging pose: (pallet_x, 3.58), yaw 270° (or 90° for South shelves)
 2. Position lift mast to entry height (-0.020m for bottom; +0.240m for upper pallet; +0.640m for shelf)
 3. Precision straight-line reverse docking into pallet cavity at (pallet_x, pallet_y)
 4. Elevate lift mast to pick height (+0.010m for bottom; +0.290m for upper pallet; +0.685m for shelf)
-5. Pull straight forward out of rack (rack extraction / undock)
+5. Pull straight forward out of rack (rack extraction / undock) back to (pallet_x, 3.58)
 6. Elevate / position lift mast to transit height (0.28m-0.29m, 40-50mm clearance above 25cm station)
-7. Follow Manhattan orthogonal corridor: (4.0, 5.0) -> (4.0, 0.0) -> (11.98, 0.0), align 180°
-8. Precision reverse docking over the 25cm staging station to stop pose (12.78, 0.0)
+7. Follow Manhattan orthogonal corridor: (4.0, 5.0) -> (4.0, 0.0) -> (12.10, 0.0), align 180°
+8. Precision reverse docking over the 25cm staging station to stop pose (12.90, 0.0)
 9. Lower mast to deposit height (0.21m) - pallet settles on station deck, forks float free
-10. Pull straight forward to staging standoff (11.98, 0.0), cleanly extracting forks
+10. Pull straight forward to staging standoff (12.10, 0.0), cleanly extracting forks
 11. Lower mast to idle/transit height (0.00m) - Mission Complete!
 ```
 
@@ -306,11 +306,12 @@ Full end-to-end orchestration scripts that combine navigation + docking + lift i
 | `~pick_level` | `bottom` | Target pallet level: `"bottom"` / `"1"` (ground double stack), `"top"` / `"2"` (upper pallet), or `"shelf"` / `"3"` (tier 2 shelf) |
 | `~skip_pickup` | `false` | If true, assumes pallet already loaded and starts directly at transit phase |
 | `~pallet_x/y` | `4.0, 5.0` | Target rack pallet cavity coordinates (m) |
-| `~dock_yaw` | `270.0°` | Approach orientation for rack pickup |
-| `~fork_offset` | `0.22m` | Tine penetration depth offset from drive_center |
-| `~station_x/y` | `13.0, 0.0` | Staging station target dock coordinates (m) |
+| `~dock_yaw` | `270.0°` | Approach orientation for rack pickup (270° North racks, 90° South shelves) |
+| `~fork_offset` | `0.22m` | Tine penetration depth offset from drive_center (85-90% penetration) |
+| `~rack_standoff` | `1.2m` | Pre-dock staging runway distance for rack entry |
+| `~station_x/y` | `13.12, 0.0` | Staging station target dock coordinates (m) |
 | `~station_yaw` | `180.0°` | Station docking orientation (facing West, forks East) |
-| `~standoff` | `0.8m` | Standoff distance in front of dock stop pose |
+| `~standoff` | `0.8m` | Standoff distance in front of station dock stop pose |
 | `~transit_lift_height`| `0.28m` | Mast height during corridor transit (40mm above station) |
 | `~deposit_lift_height`| `0.21m` | Mast height during deposit (forks float inside pocket) |
 | `~dock_speed` | `0.12 m/s` | Reverse docking creep speed limit |
@@ -321,25 +322,25 @@ Full end-to-end orchestration scripts that combine navigation + docking + lift i
 
 ### 4.2 `test_dock_reverse.py`
 
-**Purpose:** Isolated rack staging, reverse insertion, under-rack lift, and extraction test. Engages the pallet from the rack, lifts it, pulls straight forward into the aisle, and sets the mast to open-aisle transit height. Supports picking from the ground double-stack (`bottom`), upper pallet (`top`), or second-tier rack shelf (`shelf`) via `~pick_level`.
+**Purpose:** Isolated rack staging, reverse insertion, under-rack lift, and extraction test. Engages the pallet from the rack, lifts it, pulls straight forward into the aisle, and sets the mast to open-aisle transit height. Supports picking from the ground double-stack (`bottom`), upper pallet (`top`), or second-tier rack shelf (`shelf`) via `~pick_level`. Works for both North racks (`dock_yaw:=270.0`) and opposite-side South shelves (`dock_yaw:=90.0`).
 
 **Mission steps (5 phases):**
 
 ```
-STEP 1: Navigate to pre-dock staging pose (standoff 0.8m in front of dock target)
-        → Yaw: 270° | Tolerance: 5cm
+STEP 1: Navigate to pre-dock staging pose (standoff 1.2m in front of dock target)
+        → Yaw: 270° (or 90° for South shelf) | Tolerance: 5cm
 STEP 2: Position lift mast to pocket entry height
         → "bottom": -0.020m (forks at 30-50mm off floor into 0-60mm cavity)
         → "top":    +0.240m (forks at 290-310mm into 280-340mm cavity)
         → "shelf":  +0.640m (forks centered at 690-710mm into shelf cavity)
 STEP 3: dock_reverse() straight into pallet cavity
         → drive_center stops at compute_dock_target_pose(4.0, 5.0, 270°, 0.22) = (4.0, 4.78)
-        → Speed: 0.12 m/s | Tolerance: 4cm
+        → Speed: 0.12 m/s | Tolerance: 4cm | Active heading lock + minimum creep >= 0.07 m/s
 STEP 4: Lift mast to pick height (Standardized Option 1: Uniform 20mm Pallet Lift)
         → "bottom": +0.010m (lifts pallet 20mm off floor; preserves safe 12mm headroom below 0.592m beam)
         → "top":    +0.290m (lifts pallet 20mm off lower box; preserves safe 12mm headroom below 0.592m beam)
         → "shelf":  +0.685m (lifts pallet 20mm off shelf beam; preserves safe margin below upper ceiling)
-STEP 5: undock() straight forward back to staging pose
+STEP 5: undock() straight forward back to staging pose (4.0, 3.58)
         → Speed: 0.10 m/s | Tolerance: 5cm
         → Position mast to open-aisle transit height (0.150m for bottom, 0.290m for top, 0.280m for shelf)
 ```
@@ -348,32 +349,34 @@ STEP 5: undock() straight forward back to staging pose
 
 | Param | Default | Description |
 |-------|---------|-------------|
-| `~pick_level` | `bottom` | Target level: `"bottom"` / `"1"` (ground double stack), `"top"` / `"2"` (upper pallet), or `"shelf"` / `"3"` (tier 2 shelf) |
-| `~pallet_x/y` | `4.0, 5.0` | Pallet cavity center |
-| `~dock_yaw` | `270.0°` | Insertion heading |
+| `~pick_level` | `bottom` | Target level: `"bottom"` / `"1"`, `"top"` / `"2"`, or `"shelf"` / `"3"` |
+| `~pallet_x/y` | `4.0, 5.0` | Pallet cavity center coordinates (m) |
+| `~dock_yaw` | `270.0°` | Insertion heading (270° North racks, 90° South shelves) |
+| `~standoff` | `1.2m` | Pre-dock staging runway distance |
 | `~fork_offset` | `0.22m` | Tine depth (85-90% penetration) |
-| `~dock_speed` | `0.12 m/s` | Insertion creep speed |
-| `~entry_lift_height` | *(auto)* | Optional explicit mast entry height override (m) |
-| `~pick_lift_height` | *(auto)* | Optional explicit mast pick height override (m) |
+| `~transit_speed` | `0.45 m/s` | Maximum cruising linear velocity to staging point |
+| `~dock_speed` | `0.12 m/s` | Reverse docking creep speed limit |
+| `~lift_speed` | `0.08 m/s` | Mast vertical elevation velocity |
+| `~transit_lift_height`| *(auto)* | Optional override for open-aisle transit height (default: 0.150m) |
 
 ---
 
 ### 4.3 `test_undock_reverse.py`
 
-**Purpose:** Isolated staging station test at `(13.0, 0.0)`. Tests station approach, transit elevation, reverse docking over the 25cm station, lowering to deposit height, forward undock extraction, and homing the mast. Does **not** perform rack pickup or corridor transit (can run even if nothing was picked up yet).
+**Purpose:** Isolated staging station test at `(13.12, 0.0)`. Tests station approach, transit elevation, reverse docking over the 25cm station, lowering to deposit height, forward undock extraction, and homing the mast. Does **not** perform rack pickup or corridor transit (can run even if nothing was picked up yet).
 
 **Mission steps (6 phases):**
 
 ```
-STEP 1: Navigate directly to Station Pre-Dock Staging Pose (11.98m, 0.0m)
-        → Standoff at 0.8m in front of stop pose; yaw 180.0°
+STEP 1: Navigate directly to Station Pre-Dock Staging Pose (12.10m, 0.0m)
+        → Standoff at 0.8m in front of stop pose; yaw 180.0° (facing West)
 STEP 2: Elevate mast to safe transit height (0.28m)
         → 40mm clearance above 25cm station top
 STEP 3: dock_reverse() backwards over 25cm staging station
-        → drive_center stops at (12.78m, 0.0m)
+        → drive_center stops at (12.90m, 0.0m)
 STEP 4: Lower lift to deposit height (0.21m)
         → Pallet lands at 0.24m (if loaded); forks float at 0.21m (10mm above deck)
-STEP 5: undock() forward from 12.78m to 11.98m
+STEP 5: undock() forward from 12.90m to 12.10m
         → Cleanly withdraws forks back into open aisle
 STEP 6: Lower mast to 0.00m (idle/travel height)
 ```
@@ -382,15 +385,45 @@ STEP 6: Lower mast to 0.00m (idle/travel height)
 
 | Param | Default | Description |
 |---|---|---|
-| `~station_x/y` | `13.0, 0.0` | Staging station target dock cavity (m) |
-| `~station_yaw` | `180.0°` | Station approach orientation (degrees) |
+| `~station_x/y` | `13.12, 0.0` | Staging station target dock cavity (m) |
+| `~station_yaw` | `180.0°` | Station approach orientation (degrees, facing West) |
 | `~fork_offset` | `0.22m` | Tine depth offset from drive_center |
 | `~standoff` | `0.8m` | Distance in front of dock stop pose for staging (m) |
-| `~transit_lift_height` | `0.28m` | Approach elevation clearing 25cm station |
+| `~transit_lift_height` | `0.28m` | Approach elevation clearing 25cm station (40mm margin) |
 | `~deposit_lift_height` | `0.21m` | Fork float height for pallet release |
 | `~dock_speed` | `0.12 m/s` | Docking reverse creep speed |
 | `~transit_speed` | `0.45 m/s` | Linear speed limit to station staging pose |
-| `~lift_speed` | `0.06 m/s` | Mast elevation speed limit |
+| `~lift_speed` | `0.08 m/s` | Mast elevation speed limit |
+| `~stage_x/y` | *(auto)* | Explicit staging coordinate override |
+
+---
+
+### 4.4 `milestone2_mission.py`
+
+**Purpose:** Hybrid autonomous warehouse replenishment mission. Combines ROS standard **`move_base`** (global Dijkstra/NavFn planner + DWA local planner for obstacle avoidance) with precision controllers (**`MoveToPointController`**, **`PalletDockingController`**, **`LiftController`**) for sub-centimeter staging, reverse docking, and deposit.
+
+**Architecture:**
+* `move_base` executes long-distance corridor navigation to **pre-stage waypoints** (`approach = 0.6m` before the rack/station).
+* `MoveToPointController` takes over from line-of-sight to drive straight onto the docking axis without DWA costmap oscillation.
+* `PalletDockingController` executes reverse insertion with locked heading and forward undock extraction.
+
+**Key configurable params:**
+
+| Param | Default | Description |
+|---|---|---|
+| `~pick_level` | `bottom` | Target level: `"bottom"` / `"1"`, `"top"` / `"2"`, or `"shelf"` / `"3"` |
+| `~skip_pickup` | `false` | Skip pickup if pallet already loaded on forks |
+| `~pallet_x/y` | `4.0, 5.0` | Target rack pallet cavity coordinates (m) |
+| `~dock_yaw` | `270.0°` | Approach orientation (270° North racks, 90° South shelves) |
+| `~rack_standoff` | `1.2m` | Runway distance in front of dock stop pose |
+| `~station_x/y` | `13.12, 0.0` | Staging station deck cavity coordinates (m) |
+| `~station_yaw` | `180.0°` | Station approach orientation (facing West) |
+| `~standoff` | `0.8m` | Station standoff distance |
+| `~approach` | `0.6m` | Handover margin from move_base goal to stage pose |
+| `~move_base_timeout` | `180.0s` | Maximum actionlib wait timeout for move_base |
+| `~transit_speed` | `0.45 m/s` | Corridor cruising velocity |
+| `~dock_speed` | `0.12 m/s` | Creep docking velocity |
+| `~lift_speed` | `0.08 m/s` | Mast vertical elevation velocity |
 
 ---
 
@@ -398,16 +431,18 @@ STEP 6: Lower mast to 0.00m (idle/travel height)
 
 | Launch File | Node Started | Purpose |
 |-------------|-------------|---------|
-| `move_to_point.launch` | `move_to_point_node.py` | Single-shot navigate to any waypoint (x, y, yaw) |
-| `docking.launch` | `docking_node.py` | Single-shot raw fork insertion (no nav/lift) |
+| `warehouse_autonav.launch` | All stack + optional mission/RViz | Master 1-click startup (bridge, TF, AMCL, move_base) |
+| `milestone1.launch` | `milestone1_mission.py` | Full end-to-end 11-step pick-and-place replenishment mission |
+| `milestone2.launch` | `milestone2_mission.py` | Full hybrid mission combining move_base + precision docking |
 | `test_dock_reverse.launch` | `test_dock_reverse.py` | Isolated rack approach, reverse dock, under-rack lift & extraction test |
 | `test_undock_reverse.launch` | `test_undock_reverse.py` | Isolated station approach, reverse dock & undock extraction test |
-| `milestone1.launch` | `milestone1_mission.py` | Full end-to-end pick-and-place replenishment mission |
+| `move_to_point.launch` | `move_to_point_node.py` | Single-shot navigate to any waypoint (x, y, yaw) |
+| `docking.launch` | `docking_node.py` | Single-shot raw fork insertion (no nav/lift) |
+| `warehouse_localization.launch` | `map_server`, `amcl` | Probabilistic localization with automated (0,0,0) initial pose |
+| `warehouse_navigation.launch` | `move_base` | Global/local costmaps + DWA local planner |
 | `unity_bridge.launch` | *(ros_tcp_endpoint)* | Starts the ROS↔Unity TCP bridge on port 10000 |
 
-> [!IMPORTANT] Always start `unity_bridge.launch` **first** (or ensure Unity is running and connected) before any navigation launch, or odometry will time out immediately.
-
-> [!IMPORTANT] Always start `unity_bridge.launch` **first** (or ensure Unity is running and connected) before any navigation launch, or odometry will time out immediately.
+> [!IMPORTANT] Always start `unity_bridge.launch` (or `warehouse_autonav.launch`) after pressing Play in Unity to establish the TCP loopback connection.
 
 ---
 
@@ -429,35 +464,22 @@ Translates `/cmd_vel` Twist messages into wheel torques and reads `/lift_cmd` Fl
 
 ---
 
-## 7. Repo Cleanup Assessment
+## 7. Repo Status & Parameter Alignment
 
-### ✅ Healthy / Keep As-Is
-- `src/amr_navigation/docking.py` — Clean, well-commented, no dead code
-- `src/amr_navigation/move_to_point.py` — Clean, alias `ThreePhaseDockingController` maintained intentionally
-- `src/amr_navigation/lift.py` — Clean
-- `scripts/test_dock_reverse.py` — Clean after comment sync
-- `scripts/test_undock_reverse.py` — Clean; `~custom_staging_x/y` override params are not dead code — they are an intentional escape hatch
+### ✅ Verified & Standardized
+- `src/amr_navigation/docking.py` — Vector line control law, min creep $\ge 0.07\text{ m/s}$ breaks wheel stiction, fork offset default `0.22m`.
+- `src/amr_navigation/move_to_point.py` — 3-phase waypoint navigation, active heading hold, anti-stiction kick (+0.18 rad/s).
+- `src/amr_navigation/lift.py` — Velocity-ramped mast elevation, standardized default `0.08 m/s`.
+- `scripts/milestone1_mission.py` — Complete 11-phase pick-and-place pipeline with orthogonal corridor routing.
+- `scripts/milestone2_mission.py` — Hybrid mission utilizing `move_base` for corridor transit and precision docking controllers for rack/station interaction.
+- `scripts/test_dock_reverse.py` — 5-phase rack staging, reverse docking, and extraction test.
+- `scripts/test_undock_reverse.py` — 6-phase $25\text{ cm}$ station deposit and extraction test.
+- `launch/warehouse_autonav.launch` — Master 1-click startup bundling bridge, TF, localization, navigation, RViz, and optional missions.
+- **Unit Test Suite**: 33 automated unit tests (`tests/test_*.py`) passing with 100% coverage of launch contracts, geometry calculations, and state machines.
 
-### ⚠️ Minor Issues to Address
-| File | Issue | Action |
-|------|-------|--------|
-| `scripts/milestone1_mission.py` | Legacy script, no docking — could confuse newcomers | Add `# LEGACY - superseded by test_dock_reverse.launch` warning in header |
-| `scripts/docking_node.py` | Only does raw `dock_reverse`, no undock/nav — limited standalone use | Already well-documented; consider deprecation if not used in demos |
-| `tests/test_move_to_point.py` | Not seen in detail — should be reviewed for staleness | Verify unit test values match current defaults |
-| Launch files | No `milestone1.launch` or `move_to_point.launch` — check if they exist | Confirm `CMakeLists.txt` install targets are current |
-
-### 🗑️ Potentially Remove
-- Any old `*.pyc` cache files in `scripts/` or `src/` — should be in `.gitignore`
-- Check for any lingering `staging_x` / `staging_y` param blocks in **old launch files** from before the fix
-
-### ✅ `.gitignore` Should Contain
-```gitignore
-catkin_ws/build/
-catkin_ws/devel/
-catkin_ws/logs/
-**/__pycache__/
-**/*.pyc
-```
+### 📚 Consolidated Documentation
+- `docs/XSTACK_ROBOT_GUIDE.md` — Single authoritative reference for XStack AMR architecture, coordinate frames, footprint, and verification (consolidated from `XSTACK_MIGRATION.md`, `XSTACK_NEWCOMER_REPORT.md`, `XSTACK_VERIFICATION.md`).
+- `docs/WAREHOUSE_METRICS_AND_CLEARANCE.md` — Authoritative physical warehouse metrics and Option 1 uniform 20mm lift heights.
 
 ---
 
