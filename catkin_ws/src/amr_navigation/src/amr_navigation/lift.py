@@ -12,10 +12,10 @@ class LiftController:
     Controller for commanding AMR pallet stacker lift height with smooth velocity ramping.
     """
 
-    def __init__(self, topic="/lift_cmd", default_speed=0.06, initial_height=0.0):
+    def __init__(self, topic="/lift_cmd", default_speed=0.08, initial_height=0.0):
         """
         :param topic: ROS topic name (default: /lift_cmd).
-        :param default_speed: Vertical lift speed in meters per second (default: 0.06 m/s = 6 cm/s).
+        :param default_speed: Vertical lift speed in meters per second (default: 0.08 m/s = 8 cm/s).
         :param initial_height: Assumed starting mast elevation in meters (default: 0.0m).
         """
         self.topic = topic
