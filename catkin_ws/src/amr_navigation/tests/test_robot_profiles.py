@@ -61,6 +61,16 @@ class RobotProfileTests(unittest.TestCase):
         config = self.load("warehouse_localization.launch", "xstack", ("map_file:=/tmp/explicit-map.yaml",))
         self.assertIn("/tmp/explicit-map.yaml", next(n for n in config.nodes if n.type == "map_server").args)
 
+    def test_warehouse_autonav_launch_loads(self):
+        config = self.load("warehouse_autonav.launch", "xstack")
+        self.assertEqual(config.params["/move_base/local_costmap/robot_base_frame"].value, "drive_center")
+        self.assertEqual(config.params["/amcl/base_frame_id"].value, "drive_center")
+        self.assertEqual(config.params["/amcl/initial_pose_x"].value, 0.0)
+
+        config_m = self.load("warehouse_autonav.launch", "xstack", extra=("launch_mission:=true",))
+        self.assertEqual(config_m.params["/milestone2_mission/rack_standoff"].value, 1.2)
+        self.assertEqual(config_m.params["/milestone2_mission/station_x"].value, 13.12)
+
     def test_standalone_description_profiles_resolve(self):
         for profile, name in [("xstack", "xstack_amr"), ("legacy", "reverse_stacker_amr")]:
             config = roslaunch.ROSLaunchConfig()
