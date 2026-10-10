@@ -27,6 +27,9 @@ def run_dock_test():
     pallet_y = float(rospy.get_param("~pallet_y", 5.0))
     dock_yaw = float(rospy.get_param("~dock_yaw", 270.0))  # degrees
     dock_speed = float(rospy.get_param("~dock_speed", 0.12))
+    transit_speed = float(rospy.get_param("~transit_speed", 0.45))
+    lift_speed = float(rospy.get_param("~lift_speed", 0.08))
+    standoff = float(rospy.get_param("~standoff", 1.2))
 
     # Pickup level / height configuration (Standardized Option 1: Uniform 20mm Pallet Lift):
     # "bottom" / "1": entry = -0.020m, pick = +0.010m (lifts pallet 20mm from floor; 12mm headroom under beam)
@@ -46,6 +49,10 @@ def run_dock_test():
         default_pick = 0.010
         open_aisle_transit = 0.150
 
+    raw_transit = rospy.get_param("~transit_lift_height", rospy.get_param("~open_aisle_transit", None))
+    if raw_transit is not None:
+        open_aisle_transit = float(raw_transit)
+
     entry_lift_height = float(rospy.get_param("~entry_lift_height", default_entry))
     pick_lift_height = float(rospy.get_param("~pick_lift_height", default_pick))
 
@@ -57,21 +64,21 @@ def run_dock_test():
         fork_offset=fork_offset
     )
 
-    # Pre-dock staging waypoint: 0.8m standoff in front along heading (or custom param)
+    # Pre-dock staging waypoint: standoff distance in front along heading (or custom param)
     raw_stage_x = rospy.get_param("~stage_x", None)
     raw_stage_y = rospy.get_param("~stage_y", None)
     if raw_stage_x is not None:
         stage_x = float(raw_stage_x)
     else:
-        stage_x = target_drive_x + 0.8 * math.cos(math.radians(dock_yaw))
+        stage_x = target_drive_x + standoff * math.cos(math.radians(dock_yaw))
     if raw_stage_y is not None:
         stage_y = float(raw_stage_y)
     else:
-        stage_y = target_drive_y + 0.8 * math.sin(math.radians(dock_yaw))
+        stage_y = target_drive_y + standoff * math.sin(math.radians(dock_yaw))
 
-    nav = MoveToPointController(max_linear=0.35, max_angular=0.65)
+    nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65)
     dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04)
-    lift = LiftController(default_speed=0.06)
+    lift = LiftController(default_speed=lift_speed)
 
     rospy.loginfo("==================================================")
     rospy.loginfo("STARTING PALLET STAGING & REVERSE DOCKING TEST")
@@ -103,6 +110,7 @@ def run_dock_test():
         dock_yaw=dock_yaw,
         speed=dock_speed,
         pos_tolerance=0.04,
+        entry_lat_tol=0.008,  # ~10 mm fork-to-block clearance per side
         label="Pallet Insertion"
     )
     if not ok or rospy.is_shutdown():
@@ -130,7 +138,7 @@ def run_dock_test():
 
     # Position lift for open-aisle transit
     rospy.loginfo("Pallet clear of rack. Positioning to open-aisle transit height (%.3fm)...", open_aisle_transit)
-    lift.set_height(open_aisle_transit, speed=0.06)
+    lift.set_height(open_aisle_transit, speed=lift_speed)
 
     rospy.loginfo("\n==================================================")
     rospy.loginfo("SUCCESS: PALLET DOCKING & RACK EXTRACTION COMPLETE!")

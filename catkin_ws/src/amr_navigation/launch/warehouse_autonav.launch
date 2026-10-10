@@ -1,0 +1,92 @@
+<launch>
+  <!--
+    =============================================================================
+    Master 1-Click Autonomous Navigation Launch
+    =============================================================================
+    Bundles all required runtime nodes in proper sequence:
+      1. unity_bridge           (ROS-TCP-Endpoint on port 10000)
+      2. laser_tf               (drive_center -> base_link -> laser_link)
+      3. warehouse_localization (map_server + AMCL with automated initial pose)
+      4. warehouse_navigation   (move_base + NavFn + DWA local planner)
+      5. (Optional) RViz visualization
+      6. (Optional) Milestone 2 autonomous pick-and-deliver mission
+
+    Usage:
+      1. Press Play in Unity (Milestone_1 / Milestone_2 scene).
+      2. Run standard 1-click runtime stack:
+         roslaunch amr_navigation warehouse_autonav.launch
+      3. Run with RViz visualization:
+         roslaunch amr_navigation warehouse_autonav.launch launch_rviz:=true
+      4. Run with automatic Milestone 2 mission execution:
+         roslaunch amr_navigation warehouse_autonav.launch launch_mission:=true
+      5. Run mission with upper pallet or opposite-side shelf (facing 90 deg North):
+         roslaunch amr_navigation warehouse_autonav.launch launch_mission:=true pick_level:=shelf
+         roslaunch amr_navigation warehouse_autonav.launch launch_mission:=true dock_yaw:=90.0 pallet_y:=-5.0
+    =============================================================================
+  -->
+  <param name="/use_sim_time" value="true" />
+
+  <arg name="robot_profile" default="xstack" doc="xstack or legacy" />
+  <arg name="map_file" default="$(eval find('amr_navigation') + '/maps/' + {'xstack': 'milestone_1_01', 'legacy': 'warehouse_training_01'}[arg('robot_profile')] + '.yaml')" />
+
+  <!-- Initial pose in milestone_1_01 map (axle ground projection at origin) -->
+  <arg name="initial_pose_x" default="0.0" />
+  <arg name="initial_pose_y" default="0.0" />
+  <arg name="initial_pose_a" default="0.0" />
+
+  <!-- Convenience flags -->
+  <arg name="launch_rviz" default="false" />
+  <arg name="rviz_config" default="$(find amr_navigation)/rviz/navigation.rviz" />
+  <arg name="launch_mission" default="false" />
+
+  <!-- Mission parameters (used if launch_mission:=true) -->
+  <arg name="skip_pickup" default="false" />
+  <arg name="pick_level" default="bottom" />
+  <arg name="pallet_x" default="4.0" />
+  <arg name="pallet_y" default="5.0" />
+  <arg name="dock_yaw" default="270.0" />
+  <arg name="rack_standoff" default="1.2" />
+  <arg name="station_x" default="13.12" />
+  <arg name="station_y" default="0.0" />
+  <arg name="station_yaw" default="180.0" />
+
+  <!-- 1. Unity Bridge (ROS-TCP-Endpoint) -->
+  <include file="$(find amr_navigation)/launch/unity_bridge.launch" />
+
+  <!-- 2. Sensor Mount TF -->
+  <include file="$(find amr_navigation)/launch/laser_tf.launch">
+    <arg name="robot_profile" value="$(arg robot_profile)" />
+  </include>
+
+  <!-- 3. Warehouse Localization (Map Server + AMCL) -->
+  <include file="$(find amr_navigation)/launch/warehouse_localization.launch">
+    <arg name="robot_profile" value="$(arg robot_profile)" />
+    <arg name="map_file" value="$(arg map_file)" />
+    <arg name="initial_pose_x" value="$(arg initial_pose_x)" />
+    <arg name="initial_pose_y" value="$(arg initial_pose_y)" />
+    <arg name="initial_pose_a" value="$(arg initial_pose_a)" />
+  </include>
+
+  <!-- 4. Warehouse Navigation (move_base) -->
+  <include file="$(find amr_navigation)/launch/warehouse_navigation.launch">
+    <arg name="robot_profile" value="$(arg robot_profile)" />
+  </include>
+
+  <!-- 5. Optional RViz -->
+  <node if="$(arg launch_rviz)" pkg="rviz" type="rviz" name="rviz"
+        args="-d $(arg rviz_config)" output="screen" />
+
+  <!-- 6. Optional Autonomous Mission Execution -->
+  <node if="$(arg launch_mission)" pkg="amr_navigation" type="milestone2_mission.py"
+        name="milestone2_mission" output="screen">
+    <param name="skip_pickup" value="$(arg skip_pickup)" />
+    <param name="pick_level" value="$(arg pick_level)" />
+    <param name="pallet_x" value="$(arg pallet_x)" />
+    <param name="pallet_y" value="$(arg pallet_y)" />
+    <param name="dock_yaw" value="$(arg dock_yaw)" />
+    <param name="rack_standoff" value="$(arg rack_standoff)" />
+    <param name="station_x" value="$(arg station_x)" />
+    <param name="station_y" value="$(arg station_y)" />
+    <param name="station_yaw" value="$(arg station_yaw)" />
+  </node>
+</launch>

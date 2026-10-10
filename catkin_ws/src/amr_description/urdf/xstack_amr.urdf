@@ -1,0 +1,407 @@
+<?xml version="1.0"?>
+<robot name="xstack_amr">
+
+  <!-- ============================================== -->
+  <!-- MATERIALS                                      -->
+  <!-- ============================================== -->
+  <material name="dark_grey"><color rgba="0.16 0.18 0.22 1.0"/></material>
+  <material name="safety_yellow"><color rgba="0.96 0.74 0.05 1.0"/></material>
+  <material name="black"><color rgba="0.08 0.08 0.08 1.0"/></material>
+  <material name="silver"><color rgba="0.75 0.75 0.78 1.0"/></material>
+  <material name="lidar_blue"><color rgba="0.05 0.45 0.85 1.0"/></material>
+  <material name="white_glow"><color rgba="0.95 0.95 1.0 1.0"/></material>
+
+  <!-- ============================================== -->
+  <!-- ROS adaptation: ground-projected drive_center is the root. -->
+  <!-- ============================================== -->
+  <!-- ROS navigation root is the axle midpoint projected onto the ground. -->
+
+  <!-- ============================================== -->
+  <!-- BASE LINK (Counterbalanced Upright Chassis)     -->
+  <!-- Length: 0.42m (X), Width: 0.40m (Y), Height: 0.55m (Z) -->
+  <!-- Low CoM biased forward to counterweight cargo  -->
+  <!-- ============================================== -->
+  <link name="base_link">
+    <!-- Main Chassis Core Structure (Dark Grey) -->
+    <visual>
+      <origin xyz="0.02 0 0.275" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.42 0.40 0.55"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+
+    <!-- Collision Geometry -->
+    <collision>
+      <origin xyz="0.02 0 0.275" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.42 0.40 0.55"/>
+      </geometry>
+    </collision>
+
+    <!-- Counterbalance Inertial Ballast (45kg low & biased forward) -->
+    <!-- Center of mass sits at Z=0.06m (floor level) and X=+0.08m (away from forks) -->
+    <inertial>
+      <mass value="45.0"/>
+      <origin xyz="0.08 0 0.06" rpy="0 0 0"/>
+      <inertia ixx="1.65" ixy="0.0" ixz="0.0" iyy="1.52" iyz="0.0" izz="1.15"/>
+    </inertial>
+  </link>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="drive_center"/>
+    <child link="base_link"/>
+    <!-- Chassis is 0.10 m ahead and 0.05 m above the ground-projected axle. -->
+    <origin xyz="0.10 0 0.05" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ============================================== -->
+  <!-- CORRECTED XGEN STYLING: YELLOW SIDE PANELS     -->
+  <!-- Left and Right Flanks in Safety Yellow         -->
+  <!-- ============================================== -->
+
+  <!-- Left Side Yellow Panel -->
+  <link name="left_side_panel_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.38 0.015 0.48"/>
+      </geometry>
+      <material name="safety_yellow"/>
+    </visual>
+  </link>
+
+  <joint name="left_side_panel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_side_panel_link"/>
+    <origin xyz="0.02 0.205 0.27" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Left Side White Status Accent Strip -->
+  <link name="left_status_strip_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.005 0.24"/>
+      </geometry>
+      <material name="white_glow"/>
+    </visual>
+  </link>
+
+  <joint name="left_status_strip_joint" type="fixed">
+    <parent link="left_side_panel_link"/>
+    <child link="left_status_strip_link"/>
+    <origin xyz="0 0.01 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Right Side Yellow Panel -->
+  <link name="right_side_panel_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.38 0.015 0.48"/>
+      </geometry>
+      <material name="safety_yellow"/>
+    </visual>
+  </link>
+
+  <joint name="right_side_panel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_side_panel_link"/>
+    <origin xyz="0.02 -0.205 0.27" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Right Side White Status Accent Strip -->
+  <link name="right_status_strip_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.005 0.24"/>
+      </geometry>
+      <material name="white_glow"/>
+    </visual>
+  </link>
+
+  <joint name="right_status_strip_joint" type="fixed">
+    <parent link="right_side_panel_link"/>
+    <child link="right_status_strip_link"/>
+    <origin xyz="0 -0.01 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ============================================== -->
+  <!-- DIFFERENTIAL DRIVE ROTATION CENTER (Fulcrum)   -->
+  <!-- Tracked by /odom for zero-drift in-place turns -->
+  <!-- ============================================== -->
+  <link name="drive_center"/>
+
+<!-- ============================================== -->
+  <!-- COUNTERBALANCE FULCRUM DRIVE WHEELS            -->
+  <!-- Placed close to the mast (X = -0.10m) to        -->
+  <!-- minimize cargo moment arm                      -->
+  <!-- ============================================== -->
+
+  <!-- Left Drive Wheel -->
+  <link name="left_wheel_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.075" length="0.04"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.075" length="0.04"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="2.5"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.007"/>
+    </inertial>
+  </link>
+
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="left_wheel_link"/>
+    <!-- Positioned close to mast fulcrum (-X = -0.10m), +Y = 0.20m -->
+    <origin xyz="-0.10 0.20 0.025" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <!-- Right Drive Wheel -->
+  <link name="right_wheel_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.075" length="0.04"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.075" length="0.04"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="2.5"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.007"/>
+    </inertial>
+  </link>
+
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="right_wheel_link"/>
+    <!-- Positioned close to mast fulcrum (-X = -0.10m), -Y = -0.20m -->
+    <origin xyz="-0.10 -0.20 0.025" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <!-- ============================================== -->
+  <!-- COUNTERWEIGHT SUPPORT CASTERS (Front & Rear)   -->
+  <!-- Radius: 0.035m, spherical smooth contact       -->
+  <!-- ============================================== -->
+
+  <!-- Front Left Support Caster (Counterweight Stability) -->
+  <link name="front_left_caster_link">
+    <visual>
+      <geometry><sphere radius="0.035"/></geometry>
+      <material name="dark_grey"/>
+    </visual>
+    <collision>
+      <geometry><sphere radius="0.035"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.75"/>
+      <inertia ixx="0.0003" ixy="0" ixz="0" iyy="0.0003" iyz="0" izz="0.0003"/>
+    </inertial>
+  </link>
+
+  <joint name="front_left_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_left_caster_link"/>
+    <!-- At far counterweight corner (+X = +0.18m, +Y = +0.12m) -->
+    <origin xyz="0.18 0.12 -0.015" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Front Right Support Caster (Counterweight Stability) -->
+  <link name="front_right_caster_link">
+    <visual>
+      <geometry><sphere radius="0.035"/></geometry>
+      <material name="dark_grey"/>
+    </visual>
+    <collision>
+      <geometry><sphere radius="0.035"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.75"/>
+      <inertia ixx="0.0003" ixy="0" ixz="0" iyy="0.0003" iyz="0" izz="0.0003"/>
+    </inertial>
+  </link>
+
+  <joint name="front_right_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_right_caster_link"/>
+    <!-- At far counterweight corner (+X = +0.18m, -Y = -0.12m) -->
+    <origin xyz="0.18 -0.12 -0.015" rpy="0 0 0"/>
+  </joint>
+
+
+  <!-- ============================================== -->
+  <!-- NAVIGATION LIDAR (Front Bumper Level)          -->
+  <!-- ============================================== -->
+  <link name="laser_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.04" length="0.045"/></geometry>
+      <material name="lidar_blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.04" length="0.045"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser_link"/>
+    <!-- Mounted low on the front bumper for unobstructed 270 deg obstacle detection -->
+    <origin xyz="0.23 0 0.08" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ============================================== -->
+  <!-- VERTICAL RIGID MAST (Single-Stage, 0.85m tall) -->
+  <!-- ============================================== -->
+  <link name="mast_link">
+    <visual>
+      <origin xyz="0 0 0.425" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.06 0.32 0.85"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.425" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.06 0.32 0.85"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="6.0"/>
+      <origin xyz="0 0 0.35" rpy="0 0 0"/>
+      <inertia ixx="0.38" ixy="0.0" ixz="0.0" iyy="0.35" iyz="0.0" izz="0.05"/>
+    </inertial>
+  </link>
+
+  <joint name="mast_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="mast_link"/>
+    <!-- Positioned flush on rear face (-X = -0.19m) and starting at floor level (Z = 0) -->
+    <origin xyz="-0.19 0 0.00" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ============================================== -->
+  <!-- FORK CARRIAGE & PRISMATIC LIFT MECHANISM       -->
+  <!-- Lowered to floor level: 25-30mm ground entry   -->
+  <!-- ============================================== -->
+  <link name="fork_carriage_link">
+    <visual>
+      <origin xyz="-0.02 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.04 0.34 0.06"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.02 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.04 0.34 0.06"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="2.0"/>
+      <origin xyz="-0.02 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.02" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.02"/>
+    </inertial>
+  </link>
+
+  <joint name="lift_joint" type="prismatic">
+    <parent link="mast_link"/>
+    <child link="fork_carriage_link"/>
+    <!-- Default spawn position rests comfortably 50mm off the ground (no dragging/laying on floor) -->
+    <origin xyz="-0.03 0 0.01" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <!-- Can lower down to -0.02m (30mm off floor) for low ground picks, and lift up to 0.75m -->
+    <limit lower="-0.02" upper="0.75" effort="1500.0" velocity="0.12"/>
+  </joint>
+
+  <!-- ============================================== -->
+  <!-- SHORTENED FORK TINES (3/4 length = 0.375m)     -->
+  <!-- ============================================== -->
+
+  <!-- Left Fork Tine (Extends backward in -X direction) -->
+  <link name="left_fork_link">
+    <visual>
+      <origin xyz="-0.1875 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.375 0.05 0.02"/>
+      </geometry>
+      <material name="safety_yellow"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.1875 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.375 0.05 0.02"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.75"/>
+      <origin xyz="-0.1875 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.009" iyz="0" izz="0.009"/>
+    </inertial>
+  </link>
+
+  <joint name="left_fork_joint" type="fixed">
+    <parent link="fork_carriage_link"/>
+    <child link="left_fork_link"/>
+    <!-- 240mm fork tine spacing (+Y = 0.12m) -->
+    <origin xyz="-0.04 0.12 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Right Fork Tine (Extends backward in -X direction) -->
+  <link name="right_fork_link">
+    <visual>
+      <origin xyz="-0.1875 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.375 0.05 0.02"/>
+      </geometry>
+      <material name="safety_yellow"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.1875 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.375 0.05 0.02"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.75"/>
+      <origin xyz="-0.1875 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.009" iyz="0" izz="0.009"/>
+    </inertial>
+  </link>
+
+  <joint name="right_fork_joint" type="fixed">
+    <parent link="fork_carriage_link"/>
+    <child link="right_fork_link"/>
+    <!-- 240mm fork tine spacing (-Y = -0.12m) -->
+    <origin xyz="-0.04 -0.12 0" rpy="0 0 0"/>
+  </joint>
+
+</robot>

@@ -1,4 +1,56 @@
 <launch>
+<!--
+  =============================================================================
+  MILESTONE 1: END-TO-END AUTONOMOUS PALLET REPLENISHMENT MISSION
+  =============================================================================
+  Coordinates full pick-and-deliver cycle using precision controllers:
+    1. Rack Approach   : Navigates to rack pre-dock staging pose (default: 4.0, 3.58, yaw 270 deg)
+    2. Mast Positioning: Pre-positions mast to entry height (-0.020m / +0.240m / +0.640m)
+    3. Rack Docking    : Straight reverse into pallet cavity (drive_center stops at 4.0, 4.78)
+    4. Pallet Lift     : Uniform 20mm lift (+0.010m / +0.290m / +0.685m) preserving beam headroom
+    5. Rack Extraction : Forward straight undock back to pre-dock staging pose (4.0, 3.58)
+    6. Transit Lift    : Raises mast to 0.28m (clears 0.25m station deck by 40mm)
+    7. Manhattan Nav   : Orthogonal transit via corridor junction (4.0, 0.0) -> avoid diagonal blockage
+    8. Station Staging : Arrives at station standoff pose (12.10, 0.0) facing 180 deg (West)
+    9. Station Docking : Reverses over 25cm station to deposit stop pose (12.90, 0.0)
+   10. Station Deposit : Lowers mast to 0.21m (pallet touches down at 0.24m, forks float free)
+   11. Forward Undock  : Extracts forks forward to standoff (12.10, 0.0) & homes mast to 0.0m
+
+  ARGUMENTS:
+    pick_level          : "bottom" / "1" (floor stack), "top" / "2" (upper stack), "shelf" / "3" (tier 2)
+    pallet_x, pallet_y  : Target rack pallet cavity coordinates (default: 4.0, 5.0)
+    dock_yaw            : Approach heading in degrees (270.0 for North racks, 90.0 for South shelves)
+    fork_offset         : Drive center to tine reference offset (0.22m = 85-90% tine penetration)
+    rack_standoff       : Pre-dock runway distance for rack entry (default: 1.2m)
+    corridor_x, y       : Orthogonal highway junction waypoint (default: 4.0, 0.0)
+    station_x, y        : Staging station deck position (default: 13.12, 0.0)
+    station_yaw         : Heading for station deposit (default: 180.0 deg, facing West)
+    standoff            : Pre-dock standoff distance from station dock (default: 0.8m)
+    skip_pickup         : Set true if robot is already carrying a pallet (starts directly at transit)
+    transit_speed       : Max cruising linear velocity (default: 0.45 m/s)
+    dock_speed          : Max creep docking velocity (default: 0.12 m/s)
+    lift_speed          : Mast elevation velocity (default: 0.08 m/s)
+
+  COMMON USAGE EXAMPLES:
+    # 1. Standard bottom-level pallet replenishment:
+    roslaunch amr_navigation milestone1.launch
+
+    # 2. Pick upper pallet of double-stack:
+    roslaunch amr_navigation milestone1.launch pick_level:=top
+
+    # 3. Pick from second-tier elevated rack shelf:
+    roslaunch amr_navigation milestone1.launch pick_level:=shelf
+
+    # 4. Pick from opposite-side shelf (facing 90 deg North):
+    roslaunch amr_navigation milestone1.launch pallet_x:=4.0 pallet_y:=-5.0 dock_yaw:=90.0
+
+    # 5. Skip pickup if robot already carries pallet:
+    roslaunch amr_navigation milestone1.launch skip_pickup:=true
+
+    # 6. High-speed demo run:
+    roslaunch amr_navigation milestone1.launch transit_speed:=0.75 dock_speed:=0.15 lift_speed:=0.10
+  =============================================================================
+-->
   <param name="/use_sim_time" value="true" />
 
   <!-- Mission Execution Mode: set true to skip rack pickup if AMR already carries pallet -->
@@ -9,18 +61,20 @@
   <arg name="pallet_y" default="5.0" />
   <arg name="dock_yaw" default="270.0" />
   <arg name="fork_offset" default="0.22" />
+  <arg name="rack_standoff" default="1.2" />
 
   <!-- Orthogonal Corridor Transit Waypoints (Avoids Diagonal Blockage) -->
   <arg name="corridor_x" default="4.0" />
   <arg name="corridor_y" default="0.0" />
 
-  <!-- 25cm Tall Staging Station Delivery Parameters (Dock is at 13.0, 0.0) -->
-  <arg name="station_x" default="13.0" />
+  <!-- 25cm Tall Staging Station Delivery Parameters (Dock is at 13.12, 0.0) -->
+  <arg name="station_x" default="13.12" />
   <arg name="station_y" default="0.0" />
   <arg name="station_yaw" default="180.0" />
 
-  <!-- Standoff distance in front of dock stop pose (default: 0.8m -> stops at ~11.98m) -->
+  <!-- Standoff distance in front of dock stop pose (default: 0.8m -> stops at ~12.10m) -->
   <arg name="standoff" default="0.8" />
+  <arg name="station_standoff" default="$(arg standoff)" />
 
   <!-- Vertical Clearances (25cm Station Surface = 0.25m) -->
   <!-- Transit: 0.28m gives pallet bottom 0.29m (40mm clearance over 0.25m station) -->
@@ -44,12 +98,14 @@
     <param name="pallet_y" value="$(arg pallet_y)" />
     <param name="dock_yaw" value="$(arg dock_yaw)" />
     <param name="fork_offset" value="$(arg fork_offset)" />
+    <param name="rack_standoff" value="$(arg rack_standoff)" />
     <param name="corridor_x" value="$(arg corridor_x)" />
     <param name="corridor_y" value="$(arg corridor_y)" />
     <param name="station_x" value="$(arg station_x)" />
     <param name="station_y" value="$(arg station_y)" />
     <param name="station_yaw" value="$(arg station_yaw)" />
     <param name="standoff" value="$(arg standoff)" />
+    <param name="station_standoff" value="$(arg station_standoff)" />
     <param name="transit_lift_height" value="$(arg transit_lift_height)" />
     <param name="deposit_lift_height" value="$(arg deposit_lift_height)" />
     <param name="dock_speed" value="$(arg dock_speed)" />

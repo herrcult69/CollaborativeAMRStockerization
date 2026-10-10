@@ -1,12 +1,40 @@
 <launch>
+<!--
+  =============================================================================
+  DOCKING: STANDALONE PALLET REVERSE INSERTION CONTROLLER
+  =============================================================================
+  Executes pure reverse linear insertion into a pallet cavity without prior waypoint
+  navigation or mast elevation commands:
+    * Active heading lock strictly prevents chassis rotation inside pallet fork pockets
+    * Vector line control law nulls cross-track error using gentle tilt angles
+    * Guaranteed minimum creep (>= 0.07 m/s) overcomes Unity PhysX wheel stiction
+
+  ARGUMENTS:
+    dock_x, dock_y      : Pallet pocket target coordinates (default: 4.0, 5.0)
+    dock_yaw            : Locked reverse docking heading (270.0 for North racks, 90.0 for South shelves)
+    dock_speed          : Maximum reverse creep velocity (default: 0.12 m/s)
+    dock_tolerance      : Insertion longitudinal arrival tolerance (default: 0.04m = 4cm)
+    fork_offset         : Distance from drive_center to fork reference (default: 0.22m)
+
+  COMMON USAGE EXAMPLES:
+    # 1. Reverse into standard rack at (4.0, 5.0) facing South (270 deg):
+    roslaunch amr_navigation docking.launch
+
+    # 2. Reverse into opposite-side shelf at (4.0, -5.0) facing North (90 deg):
+    roslaunch amr_navigation docking.launch dock_x:=4.0 dock_y:=-5.0 dock_yaw:=90.0
+
+    # 3. Custom target with conservative creep speed:
+    roslaunch amr_navigation docking.launch dock_x:=6.0 dock_y:=5.0 dock_yaw:=270.0 dock_speed:=0.08
+  =============================================================================
+-->
   <param name="/use_sim_time" value="true" />
 
   <!-- Pallet Docking Parameters -->
   <arg name="dock_x" default="4.0" />
   <arg name="dock_y" default="5.0" />
   <arg name="dock_yaw" default="270.0" />
-  <arg name="dock_speed" default="0.08" />
-  <arg name="dock_tolerance" default="0.03" />
+  <arg name="dock_speed" default="0.12" />
+  <arg name="dock_tolerance" default="0.04" />
   <arg name="fork_offset" default="0.22" />
 
   <node pkg="amr_navigation" type="docking_node.py" name="docking_node" output="screen">

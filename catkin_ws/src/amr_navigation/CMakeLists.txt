@@ -35,11 +35,21 @@ include_directories(
 )
 
 catkin_install_python(PROGRAMS
+  scripts/go_to_point.py
   scripts/move_to_point_node.py
   scripts/docking_node.py
   scripts/lift_node.py
   scripts/milestone1_mission.py
+  scripts/milestone2_mission.py
   scripts/test_dock_reverse.py
   scripts/test_undock_reverse.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_nosetests(scripts/test_go_to_point.py)
+  # Explicit files also work on Windows bind mounts that mark every file executable.
+  catkin_add_nosetests(tests/test_robot_profiles.py)
+  catkin_add_nosetests(tests/test_move_to_point.py)
+  catkin_add_nosetests(tests/test_docking.py)
+endif()

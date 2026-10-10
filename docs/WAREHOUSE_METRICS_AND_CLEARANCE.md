@@ -114,16 +114,18 @@ From `XStackDesign.urdf` and `StackerController.cs`:
    - **Fork Tine Underside**: $Z_{\text{fork\_bottom}}(q) = 0.050 + q\text{ m}$
    - **Fork Tine Top Surface**: $Z_{\text{fork\_top}}(q) = 0.070 + q\text{ m}$
 
-### Lift Operating Modes:
+### Lift Operating Modes (Standardized Option 1: Uniform 20mm Lift Across All Levels):
 
-| Maneuver | Prismatic Position $q$ | Fork Tine Elevation | Pallet Deck Height | Clearance / State |
-| :--- | :--- | :--- | :--- | :--- |
-| **Ground Insertion (Creep In)** | $q = -0.020\text{ m}$ to $0.000\text{ m}$ | Bottom: $30-50\text{ mm}$<br>Top: $50-70\text{ mm}$ | Cavity: $0-60\text{ mm}$ | **Enters cleanly**: $30\text{ mm}$ ground clearance, $10\text{ mm}$ cavity ceiling margin. |
-| **Ground Pallet Lift (Single Stack)** | $q = +0.030\text{ m}$ to $+0.050\text{ m}$ | Top: $100-120\text{ mm}$ | Pallet lifts $20-40\text{ mm}$ | Ample clearance for open-aisle transit. |
-| **Double Stack Bottom Lift (Under Rack)** | **$q = +0.015\text{ m}$** | Top: $85\text{ mm}$ | Pallet lifts **$15\text{ mm}$** | Leaves **$17\text{ mm}$ remaining headroom** below rack beam. **Safe!** |
-| **Upper Pallet Insertion (Double Stack)** | $q = +0.260\text{ m}$ | Top: $330\text{ mm}$ | Upper cavity: $280-340\text{ mm}$ | Inserts into upper pallet pocket. *(Note: Must extract entire stack out before lifting high)* |
-| **Tier-2 Rack Shelf Insertion** | $q \approx +0.630\text{ m}$ | Top: $700\text{ mm}$ | Shelf cavity: $650-710\text{ mm}$ | Inserts onto 2nd-level rack shelf. |
-| **Tier-2 Rack Shelf Pick (Max Reach)** | **$q = +0.750\text{ m}$** | Top: **$820\text{ mm}$** | Shelf deck: $650\text{ mm}$ | **Lifts pallet $110\text{ mm}$ above shelf!** |
+| Maneuver / Level | Prismatic Position $q$ | Fork Tines ($Z_{\text{bot}} \to Z_{\text{top}}$) | Pallet Bottom / State | Clearance / Margin |
+| :--- | :---: | :---: | :---: | :--- |
+| **Ground Insertion (Level 1 / `bottom`)** | **$q = -0.020\text{ m}$** | $30\text{ mm} \to 50\text{ mm}$ | Cavity: $0 \to 60\text{ mm}$ | **Enters cleanly**: $30\text{ mm}$ floor margin, $10\text{ mm}$ ceiling margin |
+| **Ground Pick (Level 1 / `bottom`)** | **$q = +0.010\text{ m}$** | $60\text{ mm} \to 80\text{ mm}$ | Pallet lifts **$+20\text{ mm}$ off floor** | **$12\text{ mm}$ safe headroom** below $0.592\text{ m}$ under-rack beam |
+| **Upper Stack Entry (Level 2 / `top`)** | **$q = +0.240\text{ m}$** | $290\text{ mm} \to 310\text{ mm}$ | Cavity: $280 \to 340\text{ mm}$ | **Enters cleanly**: centers tines in upper pocket |
+| **Upper Stack Pick (Level 2 / `top`)** | **$q = +0.290\text{ m}$** | $340\text{ mm} \to 360\text{ mm}$ | Pallet lifts **$+20\text{ mm}$ off lower box** | **$12\text{ mm}$ safe headroom** below $0.592\text{ m}$ under-rack beam |
+| **Tier-2 Shelf Entry (Level 3 / `shelf`)** | **$q = +0.640\text{ m}$** | $690\text{ mm} \to 710\text{ mm}$ | Cavity: $650 \to 710\text{ mm}$ | **Enters cleanly**: enters cavity onto shelf |
+| **Tier-2 Shelf Pick (Level 3 / `shelf`)** | **$q = +0.685\text{ m}$** | $735\text{ mm} \to 755\text{ mm}$ | Pallet lifts **$+20\text{ mm}$ off shelf beam** | Safe clearance below upper rack roof |
+| **Corridor Transit (Over Station Clearance)** | **$q = +0.280\text{ m}$** | $330\text{ mm} \to 350\text{ mm}$ | Pallet bottom at $0.290\text{ m}$ | **$40\text{ mm}$ clearance** over $0.25\text{ m}$ staging station |
+| **Staging Station Deposit** | **$q = +0.210\text{ m}$** | $260\text{ mm} \to 280\text{ mm}$ | Pallet rests on $0.24\text{ m}$ deck | Forks sink to $0.21\text{ m}$, **floating free in pocket** |
 
 ---
 
@@ -140,7 +142,7 @@ In differential-drive robotics, spinning in-place rotates the robot about the mi
 
 ```
        +---------------------------------------------------------+
-       | [Front Bumper] (+0.33m)                                 |
+       | [Front Bumper / LiDAR] (+0.33m)                         |
        |                      base_link (X = +0.10m from drive)  |
        |                                                         |
 ===O===+==================== drive_center =======================+===O=== (X = 0.00m)
@@ -150,8 +152,8 @@ In differential-drive robotics, spinning in-place rotates the robot about the mi
        |                      Fork Carriage (X = -0.12m)         |
        |                      Fork Base (X = -0.16m)             |
        |                                                         |
-       |                      FORK CENTER (X = -0.35m) <========= [Dock Target Offset]
-       |                                                         |
+       |                      FORK REFERENCE (X = -0.22m) <====== [Dock Offset d_fork]
+       |                      Fork Tine Center (X = -0.35m)      |
        |                      Fork Tips (X = -0.535m)            |
        +---------------------------------------------------------+
 ```
@@ -164,7 +166,8 @@ In differential-drive robotics, spinning in-place rotates the robot about the mi
 | **Mast Link** | $-0.190\text{ m}$ | **$-0.090\text{ m}$** | Structural lift upright |
 | **Fork Carriage** | $-0.220\text{ m}$ | **$-0.120\text{ m}$** | Prismatic lift mount |
 | **Fork Base** | $-0.260\text{ m}$ | **$-0.160\text{ m}$** | Fork tine root |
-| **Center of Fork Tines** | $-0.4475\text{ m} \approx -0.45\text{ m}$ | **$-0.350\text{ m}$** | **Reverse Docking Offset ($d_{\text{fork}}$)** |
+| **Fork Reference ($d_{\text{fork}}$)** | $-0.320\text{ m}$ | **$-0.220\text{ m}$** | **Deep Tine Penetration ($85\text{--}90\%$)** |
+| **Geometric Center of Tines** | $-0.450\text{ m}$ | **$-0.350\text{ m}$** | Shallow Midpoint Penetration ($50\%$) |
 | **Fork Tips** | $-0.635\text{ m}$ | **$-0.535\text{ m}$** | Rearmost tip boundary |
 
 ---

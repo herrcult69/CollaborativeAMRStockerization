@@ -1,0 +1,70 @@
+<launch>
+<!--
+  =============================================================================
+  WAREHOUSE LOCALIZATION: MAP SERVER & AMCL PROBABILISTIC LOCALIZATION
+  =============================================================================
+  Loads the high-fidelity warehouse occupancy grid and tracks the AMR pose
+  using adaptive Monte Carlo localization (AMCL):
+    * Pre-configured initial pose at (0.0, 0.0, 0.0) matches Unity spawn point,
+      eliminating the need to click "2D Pose Estimate" in RViz on every launch.
+    * Base frame dynamically selects 'drive_center' (xstack) or 'base_footprint' (legacy).
+
+  ARGUMENTS:
+    robot_profile       : "xstack" (default) or "legacy"
+    map_file            : Absolute path to map .yaml file (defaults to milestone_1_01.yaml)
+    initial_pose_x, y, a: Automated AMCL initial particle filter seed (default: 0.0, 0.0, 0.0)
+
+  COMMON USAGE EXAMPLES:
+    # 1. Standard localization for XStack AMR:
+    roslaunch amr_navigation warehouse_localization.launch
+
+    # 2. Custom initial pose:
+    roslaunch amr_navigation warehouse_localization.launch initial_pose_x:=4.0 initial_pose_y:=0.0 initial_pose_a:=1.57
+
+    # 3. Legacy robot profile:
+    roslaunch amr_navigation warehouse_localization.launch robot_profile:=legacy
+  =============================================================================
+-->
+  <arg name="robot_profile" default="xstack" doc="xstack or legacy; must match the Unity scene" />
+  <arg name="base_frame" value="$(eval {'xstack': 'drive_center', 'legacy': 'base_footprint'}[arg('robot_profile')])" />
+  <!-- Run after stopping gmapping. Bridge, Unity publishers and mount TF
+       remain separate; this launch does not command robot motion. -->
+  <arg name="map_file" default="$(eval find('amr_navigation') + '/maps/' + {'xstack': 'milestone_1_01', 'legacy': 'warehouse_training_01'}[arg('robot_profile')] + '.yaml')" doc="Measured map matching the selected scene; override for subsequent mapping runs" />
+  <arg name="initial_pose_x" default="0.0" />
+  <arg name="initial_pose_y" default="0.0" />
+  <arg name="initial_pose_a" default="0.0" />
+  <arg name="initial_cov_xx" default="0.05" />
+  <arg name="initial_cov_yy" default="0.05" />
+  <arg name="initial_cov_aa" default="0.05" />
+  <param name="/use_sim_time" value="true" />
+  <node pkg="map_server" type="map_server" name="map_server"
+        args="&quot;$(arg map_file)&quot;" output="screen">
+    <param name="frame_id" value="map" />
+  </node>
+  <node pkg="amcl" type="amcl" name="amcl" output="screen">
+    <remap from="scan" to="/scan" />
+    <param name="use_map_topic" value="true" />
+    <param name="global_frame_id" value="map" />
+    <param name="odom_frame_id" value="odom" />
+    <param name="base_frame_id" value="$(arg base_frame)" />
+    <param name="tf_broadcast" value="true" />
+    <param name="odom_model_type" value="diff" />
+    <param name="laser_model_type" value="likelihood_field" />
+    <param name="laser_max_beams" value="60" />
+    <param name="min_particles" value="500" />
+    <param name="max_particles" value="2000" />
+    <param name="update_min_d" value="0.1" />
+    <param name="update_min_a" value="0.1" />
+    <param name="resample_interval" value="1" />
+    <param name="transform_tolerance" value="0.2" />
+    <param name="gui_publish_rate" value="10.0" />
+    <!-- Automated initial pose estimate matching spawn pose in Milestone_1 map.
+         Can still be overridden by args or RViz 2D Pose Estimate tool. -->
+    <param name="initial_pose_x" value="$(arg initial_pose_x)" />
+    <param name="initial_pose_y" value="$(arg initial_pose_y)" />
+    <param name="initial_pose_a" value="$(arg initial_pose_a)" />
+    <param name="initial_cov_xx" value="$(arg initial_cov_xx)" />
+    <param name="initial_cov_yy" value="$(arg initial_cov_yy)" />
+    <param name="initial_cov_aa" value="$(arg initial_cov_aa)" />
+  </node>
+</launch>

@@ -1,0 +1,23 @@
+<launch>
+  <arg name="robot_profile" default="xstack" doc="xstack or legacy; must match the Unity scene" />
+  <arg name="base_frame" value="$(eval {'xstack': 'drive_center', 'legacy': 'base_footprint'}[arg('robot_profile')])" />
+  <!-- Visualization lesson only. No velocity output goes to Unity /cmd_vel.
+       Start bridge, Unity, sensor TF and warehouse_localization separately. -->
+  <param name="/use_sim_time" value="true" />
+  <node pkg="move_base" type="move_base" name="costmap_preview" output="screen">
+    <rosparam command="load" file="$(find amr_navigation)/config/costmap_common.yaml" ns="global_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/robot_$(arg robot_profile).yaml" ns="global_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/global_costmap.yaml" ns="global_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/costmap_common.yaml" ns="local_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/robot_$(arg robot_profile).yaml" ns="local_costmap" />
+    <rosparam command="load" file="$(find amr_navigation)/config/local_costmap.yaml" ns="local_costmap" />
+    <param name="base_global_planner" value="navfn/NavfnROS" />
+    <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" />
+    <param name="shutdown_costmaps" value="false" />
+    <param name="recovery_behavior_enabled" value="false" />
+    <param name="clearing_rotation_allowed" value="false" />
+    <param name="DWAPlannerROS/odom_topic" value="/odom" />
+    <remap from="cmd_vel" to="/costmap_preview/cmd_vel_unused" />
+    <remap from="move_base_simple/goal" to="/costmap_preview/goal_unused" />
+  </node>
+</launch>

@@ -1,13 +1,45 @@
 <launch>
+<!--
+  =============================================================================
+  TEST UNDOCK REVERSE: STAGING STATION DOCK, DEPOSIT & EXTRACTION TEST
+  =============================================================================
+  Executes an isolated 6-phase test of approaching the 25cm staging station deck
+  at (13.12, 0.0), lowering the mast to deposit height, and performing forward undock:
+    1. Pre-Dock Staging: Navigates chassis to station standoff pose (12.10, 0.0, yaw 180.0 deg)
+    2. Mast Elevation  : Elevates mast to transit height (0.28m, clearing 0.25m station by 40mm)
+    3. Straight Reverse: Reverses over 25cm station to stop pose (12.90, 0.0) with locked yaw
+    4. Station Deposit : Lowers mast to deposit height (0.21m): pallet touches down, forks float free
+    5. Forward Undock  : Extracts forks forward to standoff (12.10, 0.0) leaving pallet on station
+    6. Mast Home       : Lowers mast to idle/home height (0.00m)
+
+  ARGUMENTS:
+    station_x, station_y: Staging station deck cavity coordinates (default: 13.12, 0.0)
+    station_yaw         : Station approach heading in degrees (default: 180.0 deg, facing West)
+    fork_offset         : Drive center to tine reference offset (default: 0.22m)
+    standoff            : Pre-dock staging standoff distance (default: 0.8m -> stops at ~12.10m)
+    transit_lift_height : Mast height during approach (default: 0.28m -> 40mm clearance)
+    deposit_lift_height : Mast height for deposit (default: 0.21m -> forks float in pocket)
+    dock_speed          : Docking reverse creep speed limit (default: 0.12 m/s)
+    transit_speed       : Linear speed limit to station staging standoff (default: 0.45 m/s)
+    lift_speed          : Mast elevation vertical speed limit (default: 0.08 m/s)
+
+  COMMON USAGE EXAMPLES:
+    # 1. Run isolated staging station undock test at (13.12, 0.0):
+    roslaunch amr_navigation test_undock_reverse.launch
+
+    # 2. Custom station position, standoff, and speeds:
+    roslaunch amr_navigation test_undock_reverse.launch station_x:=13.12 station_y:=0.0 standoff:=0.8 transit_speed:=0.50 dock_speed:=0.12 lift_speed:=0.08
+  =============================================================================
+-->
   <param name="/use_sim_time" value="true" />
 
-  <!-- 25cm Tall Staging Station Parameters (Dock target cavity at 13.0, 0.0) -->
-  <arg name="station_x" default="13.0" />
+  <!-- 25cm Tall Staging Station Parameters (Dock target cavity at 13.12, 0.0) -->
+  <arg name="station_x" default="13.12" />
   <arg name="station_y" default="0.0" />
   <arg name="station_yaw" default="180.0" />
   <arg name="fork_offset" default="0.22" />
 
-  <!-- Standoff distance in front of dock stop pose (default: 0.8m -> stops at ~11.98m) -->
+  <!-- Standoff distance in front of dock stop pose (default: 0.8m -> stops at ~12.10m) -->
   <arg name="standoff" default="0.8" />
 
   <!-- Vertical Clearances (25cm Station Surface = 0.25m) -->
@@ -19,7 +51,7 @@
   <!-- Speed Parameters -->
   <arg name="dock_speed" default="0.12" />
   <arg name="transit_speed" default="0.45" />
-  <arg name="lift_speed" default="0.06" />
+  <arg name="lift_speed" default="0.08" />
 
   <!-- Pallet Station Undock Reverse Node -->
   <node pkg="amr_navigation" type="test_undock_reverse.py" name="test_undock_reverse" output="screen">

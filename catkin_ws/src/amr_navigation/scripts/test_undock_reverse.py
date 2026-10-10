@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Test Staging Station Reverse Docking & Undock Extraction:
-  1. Navigate directly to Staging Station Pre-Dock Staging Pose (~11.98m, 0.0) facing 180 deg
+  1. Navigate directly to Staging Station Pre-Dock Staging Pose (~12.10m, 0.0) facing 180 deg
   2. Elevate lift mast to safe transit height (0.28m) to clear the 25cm (0.25m) staging station
-  3. Precision reverse docking over the 25cm tall staging station (stop at 13.0 - fork_offset = 12.78m)
+  3. Precision reverse docking over the 25cm tall staging station (stop at 13.12 - fork_offset = 12.90m)
   4. Lower mast to deposit height (0.21m):
      - At 0.24m: Pallet touches down on the 0.25m station deck
      - At 0.21m: Forks lower inside pocket cavity (10mm clearance above deck, 30mm below ceiling)
-  5. Undock extraction: Pull straight forward from 12.78m back to staging standoff (~11.98m) (locked yaw 180 deg)
+  5. Undock extraction: Pull straight forward from 12.90m back to staging standoff (~12.10m) (locked yaw 180 deg)
   6. Lower mast to idle/travel height (0.00m) - Mission Complete!
 """
 import math
@@ -23,8 +23,8 @@ def run_undock_reverse_test():
     # Physical kinematics: distance from drive_center (tracked by /odom) to fork reference
     fork_offset = float(rospy.get_param("~fork_offset", 0.22))  # deep tine penetration (85-90%)
 
-    # Staging Station / Stocker Target (Located at X=13.0, Y=0.0, 25cm tall)
-    station_x = float(rospy.get_param("~station_x", 13.0))
+    # Staging Station / Stocker Target (Located at X=13.12, Y=0.0, 25cm tall)
+    station_x = float(rospy.get_param("~station_x", 13.12))
     station_y = float(rospy.get_param("~station_y", 0.0))
     station_yaw = float(rospy.get_param("~station_yaw", 180.0))  # Facing West, rear pointing East into dock
     standoff = float(rospy.get_param("~standoff", 0.8))  # Standoff in front of drive_stop pose
@@ -32,7 +32,7 @@ def run_undock_reverse_test():
     # Kinematic Speeds
     dock_speed = float(rospy.get_param("~dock_speed", 0.12))
     transit_speed = float(rospy.get_param("~transit_speed", 0.45))
-    lift_speed = float(rospy.get_param("~lift_speed", 0.06))
+    lift_speed = float(rospy.get_param("~lift_speed", 0.08))
 
     # Lift Heights:
     # Transit Clearance: +0.28m (pallet bottom at 0.010 + 0.28 = 0.29m -> 40mm clearance over 25cm station)
@@ -40,8 +40,8 @@ def run_undock_reverse_test():
     TRANSIT_LIFT_HEIGHT = float(rospy.get_param("~transit_lift_height", 0.28))
     DEPOSIT_LIFT_HEIGHT = float(rospy.get_param("~deposit_lift_height", 0.21))
 
-    # Calculate Staging Station Deposit Poses (dock target at 13.0, 0.0):
-    # Stop pose: drive_center stops at station_x + fork_offset * cos(yaw) = 13.0 - 0.22 = 12.78m
+    # Calculate Staging Station Deposit Poses (dock target at 13.12, 0.0):
+    # Stop pose: drive_center stops at station_x + fork_offset * cos(yaw) = 13.12 - 0.22 = 12.90m
     target_deposit_x, target_deposit_y = compute_dock_target_pose(
         pallet_x=station_x,
         pallet_y=station_y,
@@ -50,15 +50,17 @@ def run_undock_reverse_test():
     )
 
     # Pre-dock staging pose: standoff distance in front of stop pose along heading
-    # stage_x = 12.78 + 0.8 * (-1.0) = 11.98m (~12.0m) -> 1.0m clearance in front of dock
+    # stage_x = 12.90 + 0.8 * (-1.0) = 12.10m (~12.1m) -> ~1.0m clearance in front of dock
     stage_station_x = target_deposit_x + standoff * math.cos(math.radians(station_yaw))
     stage_station_y = target_deposit_y + standoff * math.sin(math.radians(station_yaw))
 
-    # Explicit override support (using separate param name to avoid rosparam collision)
-    if rospy.has_param("~custom_staging_x"):
-        stage_station_x = float(rospy.get_param("~custom_staging_x"))
-    if rospy.has_param("~custom_staging_y"):
-        stage_station_y = float(rospy.get_param("~custom_staging_y"))
+    # Pre-dock staging pose overrides (~stage_x/~stage_y with backward compatibility for ~custom_staging_x/~custom_staging_y)
+    raw_stage_x = rospy.get_param("~stage_x", rospy.get_param("~custom_staging_x", None))
+    raw_stage_y = rospy.get_param("~stage_y", rospy.get_param("~custom_staging_y", None))
+    if raw_stage_x is not None:
+        stage_station_x = float(raw_stage_x)
+    if raw_stage_y is not None:
+        stage_station_y = float(raw_stage_y)
 
     retreat_x = stage_station_x  # Undock extracts back to pre-dock standoff
 

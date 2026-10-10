@@ -1,4 +1,43 @@
 <launch>
+<!--
+  =============================================================================
+  TEST DOCK REVERSE: PALLET RACK REVERSE DOCKING & EXTRACTION TEST
+  =============================================================================
+  Executes an isolated 5-phase test of reverse docking into a pallet rack,
+  lifting the pallet, and extracting it forward out into the open aisle:
+    1. Pre-Dock Staging: Navigates chassis to standoff pose (default: 1.2m from dock)
+    2. Mast Entry Pose : Positions mast to entry height (-0.020m / +0.240m / +0.640m)
+    3. Straight Reverse: Backs straight into pallet pocket with active heading lock
+    4. Pallet Pick Lift: Elevates mast by uniform +20mm (+0.010m / +0.290m / +0.685m)
+    5. Rack Extraction : Pulls forward out of rack to standoff, sets transit height (0.150m)
+
+  ARGUMENTS:
+    pallet_x, pallet_y  : Target pallet cavity center coordinates (default: 4.0, 5.0)
+    dock_yaw            : Approach heading in degrees (270.0 for North racks, 90.0 for South shelves)
+    dock_speed          : Reverse creep speed limit (default: 0.12 m/s; clamp >= 0.07 m/s prevents stiction)
+    fork_offset         : Drive center to tine reference offset (0.22m = 85-90% tine penetration)
+    standoff            : Pre-dock staging runway distance (default: 1.2m)
+    transit_speed       : Max forward navigation speed to staging point (default: 0.45 m/s)
+    lift_speed          : Mast elevation vertical speed (default: 0.08 m/s)
+    pick_level          : "bottom" / "1" (floor stack), "top" / "2" (upper stack), "shelf" / "3" (tier 2)
+
+  COMMON USAGE EXAMPLES:
+    # 1. Run default rack docking test at (4.0, 5.0) facing 270 deg (bottom level):
+    roslaunch amr_navigation test_dock_reverse.launch
+
+    # 2. Pick upper pallet (second height) of a double stack:
+    roslaunch amr_navigation test_dock_reverse.launch pick_level:=top
+
+    # 3. Pick pallet from elevated second-tier rack shelf:
+    roslaunch amr_navigation test_dock_reverse.launch pick_level:=shelf
+
+    # 4. Pick from opposite-side shelf (facing 90 deg North):
+    roslaunch amr_navigation test_dock_reverse.launch pallet_x:=4.0 pallet_y:=-5.0 dock_yaw:=90.0
+
+    # 5. Custom pallet location, penetration depth, and creep speed:
+    roslaunch amr_navigation test_dock_reverse.launch pallet_x:=6.0 pallet_y:=5.0 dock_yaw:=270.0 fork_offset:=0.22 dock_speed:=0.12
+  =============================================================================
+-->
   <param name="/use_sim_time" value="true" />
 
   <!-- Pallet Target & Staging Parameters -->
@@ -7,6 +46,11 @@
   <arg name="dock_yaw" default="270.0" />
   <arg name="dock_speed" default="0.12" />
   <arg name="fork_offset" default="0.22" />
+  <arg name="standoff" default="1.2" />
+
+  <!-- Kinematic Speeds -->
+  <arg name="transit_speed" default="0.45" />
+  <arg name="lift_speed" default="0.08" />
 
   <!-- Pickup Level Profile: "bottom" (level 1), "top" (level 2, upper pallet), "shelf" (level 3) -->
   <arg name="pick_level" default="bottom" />
@@ -18,6 +62,9 @@
     <param name="dock_yaw" value="$(arg dock_yaw)" />
     <param name="dock_speed" value="$(arg dock_speed)" />
     <param name="fork_offset" value="$(arg fork_offset)" />
+    <param name="standoff" value="$(arg standoff)" />
+    <param name="transit_speed" value="$(arg transit_speed)" />
+    <param name="lift_speed" value="$(arg lift_speed)" />
     <param name="pick_level" value="$(arg pick_level)" />
   </node>
 </launch>
