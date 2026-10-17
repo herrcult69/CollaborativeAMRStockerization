@@ -88,10 +88,14 @@ Phase 2: DRIVE_TO_GOAL
      └─ If heading drifts > 37 deg (0.65 rad) mid-drive → return to Phase 1
 Phase 3: ALIGN_FINAL_YAW
   └─ Arrived at position, rotate to final yaw target
-     └─ If position drifts > 1.6× tolerance during spin → recover to Phase 1 or 2
+     └─ Turning speed capped to <= 0.40 rad/s (~23 deg/s) with gentle ramp to 0.28 rad/s within 11 deg
+     └─ If position drifts > max(0.14m, 2.5× tolerance) during spin → recover to Phase 1 or 2
 ```
 
 **Anti-stiction kick:** If the robot is commanded angular velocity but yaw doesn't change for >12 consecutive cycles (0.6s at 20Hz), it applies an additional breakaway kick `+0.18 rad/s`. Overcomes Unity PhysX tire scrub static friction.
+
+**TF2 Unified Coordinate Frame Support:**  
+The controller supports running in the global `/map` frame via `tf2_ros` (`lookup_transform(reference_frame, robot_frame, Time(0))`). If TF lookup fails or `reference_frame="odom"`, it automatically falls back to the `/odom` subscriber. This decouples the robot from its initial spawn origin.
 
 #### Key Parameters (ROS params, all settable from launch file)
 
@@ -106,7 +110,9 @@ Phase 3: ALIGN_FINAL_YAW
 | `~min_linear` | `0.06` | Min driving speed (m/s) |
 | `~max_angular` | `0.65` | Max turn speed (rad/s) |
 | `~min_angular` | `0.42` | Min turn speed — overcomes Unity stiction (rad/s) |
-| `~receipt_timeout` | `1.5` | Odometry staleness limit (s) — emergency stop |
+| `~reference_frame` | `map` | Reference coordinate frame (`map` or `odom`) |
+| `~robot_frame` | `drive_center` | AMR base tracking frame |
+| `~receipt_timeout` | `1.5` | Odometry/TF staleness limit (s) — emergency stop |
 
 #### Speed Ramp Formula
 ```
@@ -117,12 +123,12 @@ linear = target_v * cos(heading_error)   # reduces speed when pointing off-axis
 #### Public API
 
 ```python
-# Constructor: pass max speeds to override defaults
-nav = MoveToPointController(max_linear=0.35, max_angular=0.65)
+# Constructor: pass max speeds and reference frame
+nav = MoveToPointController(max_linear=0.35, max_angular=0.65, reference_frame="map")
 
-# Blocking navigation call
-ok = nav.navigate_to(gx, gy, goal_yaw=270.0, pos_tolerance=0.05, label="WP1")
-# Returns True on success, False if odometry lost or ros shutdown
+# Blocking navigation call with configurable tolerances
+ok = nav.navigate_to(gx, gy, goal_yaw=270.0, pos_tolerance=0.05, yaw_tolerance=1.5, label="WP1")
+# Returns True on success, False if pose stream lost or ros shutdown
 
 # Single-goal node runner (reads goal from ROS params)
 nav.run()
@@ -135,10 +141,13 @@ nav.run()
 ### 2.2 `docking.py`
 **Path:** `src/amr_navigation/docking.py`
 
-Precision pallet insertion / extraction library. Works differently from `MoveToPointController` — **no turning is allowed at all** during docking. The robot must arrive pre-aligned; the controller only commands longitudinal (linear) velocity plus a small heading-correction term to prevent yaw drift.
+Precision pallet insertion / extraction library. Works differently from `MoveToPointController` — **no turning is allowed at all** during docking. The robot must arrive pre-aligned; the controller only commands longitudinal (linear) velocity plus a heading-correction term to maintain alignment.
 
 #### Key Design Principle
-Pallet legs have only ~80mm lateral clearance per tine. Any rotation during insertion would laterally strike the legs. The controller clamps angular velocity to ±0.18 rad/s with a gain of `1.6` on yaw error — it corrects micro-drift but cannot steer around obstacles.
+Pallet legs have only ~80mm lateral clearance per tine. Any rotation during insertion would laterally strike the legs.
+- **Heading stabilization gain**: Raised from `1.6` to `2.2` with angular clamp `±0.24 rad/s` (was `±0.18 rad/s`) to overcome tire scrub stiction and floor slip while reversing into the pocket.
+- **Entry Lateral Tolerance**: Enforces strict lateral alignment (`dock_entry_lat_tol = 0.015m` by default) before the fork tines penetrate the pocket cavity.
+- **TF2 Unified Frame**: Reads position and yaw in the `/map` frame via TF2 (with graceful `/odom` fallback), ensuring exact coordinate grounding regardless of where the robot spawned.
 
 #### `compute_dock_target_pose(pallet_x, pallet_y, dock_yaw_deg, fork_offset=0.22)`
 Helper function to calculate where `drive_center` must stop so the forks are positioned over the pallet cavity.
@@ -403,23 +412,29 @@ STEP 6: Lower mast to 0.00m (idle/travel height)
 **Purpose:** Hybrid autonomous warehouse replenishment mission. Combines ROS standard **`move_base`** (global Dijkstra/NavFn planner + DWA local planner for obstacle avoidance) with precision controllers (**`MoveToPointController`**, **`PalletDockingController`**, **`LiftController`**) for sub-centimeter staging, reverse docking, and deposit.
 
 **Architecture:**
+* **Unified Frame**: All navigation and precision stages operate in the global `/map` frame using TF2 lookups, fully decoupling the mission from the initial spawn point.
 * `move_base` executes long-distance corridor navigation to **pre-stage waypoints** (`approach = 0.6m` before the rack/station).
 * `MoveToPointController` takes over from line-of-sight to drive straight onto the docking axis without DWA costmap oscillation.
-* `PalletDockingController` executes reverse insertion with locked heading and forward undock extraction.
+  - Rack Staging: `pos_tolerance = 0.05m`, `yaw_tolerance = 1.5°`.
+  - Stocker Staging: `pos_tolerance = 0.06m`, `yaw_tolerance = 1.5°` with stabilized final yaw speed ($\le 0.40\text{ rad/s}$) to prevent pallet inertia tire scrub.
+* `PalletDockingController` executes reverse insertion with locked heading, active drift correction ($k=2.2$), strict lateral pocket check (`dock_entry_lat_tol = 0.015m`), and forward undock extraction.
+* Deposit Stop: Configured for `station_x = 13.05m` with `pos_tolerance = 0.08m` to guarantee clean settlement against the physical workbench.
 
 **Key configurable params:**
 
 | Param | Default | Description |
 |---|---|---|
+| `~reference_frame` | `map` | Reference coordinate frame (`map` or fallback `odom`) |
 | `~pick_level` | `bottom` | Target level: `"bottom"` / `"1"`, `"top"` / `"2"`, or `"shelf"` / `"3"` |
 | `~skip_pickup` | `false` | Skip pickup if pallet already loaded on forks |
 | `~pallet_x/y` | `4.0, 5.0` | Target rack pallet cavity coordinates (m) |
 | `~dock_yaw` | `270.0°` | Approach orientation (270° North racks, 90° South shelves) |
+| `~dock_entry_lat_tol` | `0.015m` | Maximum lateral error (15 mm) before fork tines enter pallet pocket |
 | `~rack_standoff` | `1.2m` | Runway distance in front of dock stop pose |
-| `~station_x/y` | `13.12, 0.0` | Staging station deck cavity coordinates (m) |
+| `~station_x/y` | `13.05, 0.0` | Staging station deck cavity coordinates (m) |
 | `~station_yaw` | `180.0°` | Station approach orientation (facing West) |
 | `~standoff` | `0.8m` | Station standoff distance |
-| `~approach` | `0.6m` | Handover margin from move_base goal to stage pose |
+| `~approach` | `0.6m` | Handover margin from move_base goal to stage pose (keeps goal in clear corridor) |
 | `~move_base_timeout` | `180.0s` | Maximum actionlib wait timeout for move_base |
 | `~transit_speed` | `0.45 m/s` | Corridor cruising velocity |
 | `~dock_speed` | `0.12 m/s` | Creep docking velocity |
@@ -431,15 +446,15 @@ STEP 6: Lower mast to 0.00m (idle/travel height)
 
 | Launch File | Node Started | Purpose |
 |-------------|-------------|---------|
-| `warehouse_autonav.launch` | All stack + optional mission/RViz | Master 1-click startup (bridge, TF, AMCL, move_base) |
+| `warehouse_autonav.launch` | All stack + optional mission/RViz | Master 1-click startup (bridge, TF, AMCL with `milestone_2_01.yaml`, move_base) |
 | `milestone1.launch` | `milestone1_mission.py` | Full end-to-end 11-step pick-and-place replenishment mission |
-| `milestone2.launch` | `milestone2_mission.py` | Full hybrid mission combining move_base + precision docking |
+| `milestone2.launch` | `milestone2_mission.py` | Full hybrid mission combining move_base + precision docking in `/map` frame |
 | `test_dock_reverse.launch` | `test_dock_reverse.py` | Isolated rack approach, reverse dock, under-rack lift & extraction test |
 | `test_undock_reverse.launch` | `test_undock_reverse.py` | Isolated station approach, reverse dock & undock extraction test |
 | `move_to_point.launch` | `move_to_point_node.py` | Single-shot navigate to any waypoint (x, y, yaw) |
 | `docking.launch` | `docking_node.py` | Single-shot raw fork insertion (no nav/lift) |
-| `warehouse_localization.launch` | `map_server`, `amcl` | Probabilistic localization with automated (0,0,0) initial pose |
-| `warehouse_navigation.launch` | `move_base` | Global/local costmaps + DWA local planner |
+| `warehouse_localization.launch` | `map_server`, `amcl` | Probabilistic localization; defaults to `milestone_2_01.yaml` with `initial_cov_* = 0.05` |
+| `warehouse_navigation.launch` | `move_base` | Global/local costmaps + DWA local planner (`visualize_potential: false`) |
 | `unity_bridge.launch` | *(ros_tcp_endpoint)* | Starts the ROS↔Unity TCP bridge on port 10000 |
 
 > [!IMPORTANT] Always start `unity_bridge.launch` (or `warehouse_autonav.launch`) after pressing Play in Unity to establish the TCP loopback connection.

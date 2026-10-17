@@ -391,3 +391,41 @@ USB attachment to WSL does not by itself prove that a Docker container can acces
 | [Bridge launch](../catkin_ws/src/amr_navigation/launch/unity_bridge.launch), [navigation launch](../catkin_ws/src/amr_navigation/launch/move_base.launch), and [Unity test script](../unity_scripts/RosTestBridge.cs) | Actual startup behavior and the limits of the current implementation |
 
 Embedded chatbot prompts, role assignments, and submission instructions in the reference documents were treated as context. They were not instructions to install software, change the project architecture, or submit reports during this documentation task.
+
+---
+
+## 8. Milestone 2 Navigation, Localization & Hybrid Docking Troubleshooting
+
+### 8.1 Planner Trajectory Aborts & "Rotation cmd in collision" (`cost: -6.000000`)
+
+* **Symptom:** During Leg 1 (`move_base` to Rack Pre-Stage), DWA outputs repeated warnings: `Invalid Trajectory 0.000000, 0.000000, 0.450000, cost: -6.000000`, `Rotation cmd in collision`, `Error when rotating`, and eventually aborts or gets trapped against shelf corners.
+* **Root Causes:**
+  1. **Handover Margin (`approach`) Too Large**: When `approach` was increased from `0.6m` to `0.8m`, the pre-stage waypoint $Y = 3.58 - 0.8 = 2.78\text{ m}$ placed the goal directly into the purple inflation radius of the shelf end-cap.
+  2. **AMCL Covariance Overtightened**: Setting `initial_cov_*` to `0.005` pinned the particle filter artificially to `(0,0,0)`. Because the newly scanned map (`milestone_2_01`) had a minor sub-centimeter offset from the Unity spawn point, the particles could not disperse to snap to the live LiDAR scan, resulting in pose tilt that steered the AMR closer to physical colliders than costmap predicted.
+* **Resolution:**
+  - In `milestone2.launch`, keep `approach=0.6` so the pre-stage goal sits comfortably in the free corridor ($Y = 2.98\text{ m}$).
+  - In `warehouse_localization.launch`, maintain `initial_cov_*=0.05` to give AMCL particles adequate exploration radius to snap tightly to the real laser scan.
+
+### 8.2 In-Place Multi-Rotation Oscillation During Final Yaw Alignment (Leg 5)
+
+* **Symptom:** At Stocker Staging (Leg 5), after reaching position, the robot spins in place, stops, spins all the way back around, drives a few centimeters, and repeats multiple times before finally settling.
+* **Root Causes:**
+  1. **Pallet Inertia at High Angular Velocity**: Rotating in place at `0.65 rad/s` (~$37^\circ/\text{s}$) with an elevated loaded pallet caused the differential-drive tires to scrub and slide laterally on the floor.
+  2. **Hair-Trigger State Machine Drift Threshold**: In `move_to_point.py`, Phase 3 (`ALIGN_FINAL_YAW`) had an abort condition: `if dist_to_goal > 1.6 * pos_tolerance`. With `pos_tolerance = 0.05m`, any wheel scrub greater than $0.08\text{ m}$ tripped an immediate abort back to Phase 1 (`ALIGN_TO_GOAL`). Because the waypoint was directly underneath the robot, `heading_error` evaluated to $\approx -150^\circ$, commanding another full-circle rotation to re-align.
+* **Resolution:**
+  - In `move_to_point.py`, capped in-place turning velocity during Phase 3 to $\le 0.40\text{ rad/s}$ with a gentle ramp down to $0.28\text{ rad/s}$ within $11^\circ$ ($0.20\text{ rad}$).
+  - Replaced the hair-trigger threshold with hysteresis: `drift_limit = max(0.14, 2.5 * self.pos_tolerance)`. Minor tire pivots on the spot no longer cause false aborts.
+  - In `milestone2_mission.py`, aligned Leg 5 staging to `pos_tolerance=0.06` and `yaw_tolerance=1.5`.
+
+### 8.3 Staging Station Deposit Stalling Before Pallet Release
+
+* **Symptom:** In Leg 6, reverse docking into the staging station stops short of $12.90\text{ m}$ (holding at $X \approx 12.75\text{ m}$ to $12.83\text{ m}$) and stalls with `Remaining: 0.076m`, never lowering the mast to deposit.
+* **Root Cause:** The physical workbench and deck stop collider in Unity are situated at $X \approx 12.83\text{ m}$. Commanding `target_x = 12.90m` with a strict $0.04\text{ m}$ tolerance causes the robot bumper to physically press against the station collider without reaching the setpoint.
+* **Resolution:**
+  - Shifted `station_x` default from `13.12m` to `13.05m` (resulting in `target_deposit_x = 12.83m`).
+  - Set deposit `pos_tolerance = 0.08m` in `milestone2_mission.py` so the controller completes upon making flush contact with the workbench.
+
+### 8.4 Coordinate Frame Decoupling (`map` vs `/odom`)
+
+* **Background:** In Milestone 1, precision controllers subscribed directly to `/odom` (which starts at `(0,0,0)` wherever the robot boots), while `move_base` operated in `/map`. If the robot spawned anywhere other than the exact map datum, docking would fail.
+* **Resolution:** Both `MoveToPointController` and `PalletDockingController` now look up transforms in the global `/map` frame via `tf2_ros` (`lookup_transform(reference_frame, robot_frame, rospy.Time(0))`), with automatic fallback to `/odom` if TF is unavailable. All mission targets now represent true warehouse coordinates.

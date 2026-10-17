@@ -8,7 +8,7 @@ Control alternates, one /cmd_vel publisher at a time:
   Docking / Lift                   -> pick or deposit, exactly as Milestone 1
 
 Requires unity_bridge, laser_tf, warehouse_localization (AMCL) and warehouse_navigation (move_base).
-Precision legs use /odom coordinates; valid while the robot spawns at the map origin (map ~= odom).
+All coordinates operate in the map frame (MoveToPoint and Docking use TF2 lookups).
 """
 import math
 import actionlib
@@ -55,7 +55,7 @@ def run_mission():
     dock_yaw = float(rospy.get_param("~dock_yaw", 270.0))
     fork_offset = float(rospy.get_param("~fork_offset", 0.22))
 
-    station_x = float(rospy.get_param("~station_x", 13.12))
+    station_x = float(rospy.get_param("~station_x", 13.05))
     station_y = float(rospy.get_param("~station_y", 0.0))
     station_yaw = float(rospy.get_param("~station_yaw", 180.0))
     standoff = float(rospy.get_param("~standoff", 0.8))
@@ -99,9 +99,11 @@ def run_mission():
     stage_station_y = target_deposit_y + standoff * math.sin(math.radians(station_yaw))
     pre_station = compute_prestage_pose(stage_station_x, stage_station_y, station_yaw, approach)
 
+    reference_frame = str(rospy.get_param("~reference_frame", "map"))
+
     initial_lift = 0.15 if skip_pickup else 0.00
-    nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65)
-    dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04)
+    nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65, reference_frame=reference_frame)
+    dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04, reference_frame=reference_frame)
     lift = LiftController(default_speed=lift_speed, initial_height=initial_lift)
 
     client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
@@ -132,20 +134,21 @@ def run_mission():
             return
 
         rospy.loginfo("\n>>> [LEG 2] MoveToPoint -> Rack Staging")
-        ok = nav.navigate_to(gx=stage_rack_x, gy=stage_rack_y, goal_yaw=dock_yaw, pos_tolerance=0.05, label="Rack Staging")
+        ok = nav.navigate_to(gx=stage_rack_x, gy=stage_rack_y, goal_yaw=dock_yaw, pos_tolerance=0.05, yaw_tolerance=1.5, label="Rack Staging")
         if not ok or rospy.is_shutdown():
             rospy.logwarn("Mission aborted at Rack Staging.")
             return
 
         rospy.loginfo("\n>>> [LEG 3] Pick: entry height %.3fm, reverse, lift, extract", ENTRY_LIFT_HEIGHT)
         lift.set_height(ENTRY_LIFT_HEIGHT, speed=0.06)
+        dock_entry_lat_tol = float(rospy.get_param("~dock_entry_lat_tol", 0.015))  # 15 mm tolerance (pocket has ~35 mm clearance)
         ok = dock.dock_reverse(
             target_x=target_rack_x,
             target_y=target_rack_y,
             dock_yaw=dock_yaw,
             speed=dock_speed,
             pos_tolerance=0.04,
-            entry_lat_tol=0.008,  # ~10 mm fork-to-block clearance per side
+            entry_lat_tol=dock_entry_lat_tol,
             label="Rack Insertion"
         )
         if not ok or rospy.is_shutdown():
@@ -178,7 +181,7 @@ def run_mission():
         return
 
     rospy.loginfo("\n>>> [LEG 5] MoveToPoint -> Stocker Staging")
-    ok = nav.navigate_to(gx=stage_station_x, gy=stage_station_y, goal_yaw=station_yaw, pos_tolerance=0.05, label="Stocker Staging")
+    ok = nav.navigate_to(gx=stage_station_x, gy=stage_station_y, goal_yaw=station_yaw, pos_tolerance=0.06, yaw_tolerance=1.5, label="Stocker Staging")
     if not ok or rospy.is_shutdown():
         rospy.logwarn("Mission aborted at Stocker Staging.")
         return
@@ -193,7 +196,7 @@ def run_mission():
         target_y=target_deposit_y,
         dock_yaw=station_yaw,
         speed=dock_speed,
-        pos_tolerance=0.04,
+        pos_tolerance=0.08,
         label="Station Reverse Docking"
     )
     if not ok or rospy.is_shutdown():

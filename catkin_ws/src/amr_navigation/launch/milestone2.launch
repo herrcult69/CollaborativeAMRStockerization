@@ -64,12 +64,12 @@
   <arg name="fork_offset" default="0.22" />
   <arg name="rack_standoff" default="1.2" />
 
-  <arg name="station_x" default="13.12" />
+  <arg name="station_x" default="13.05" />
   <arg name="station_y" default="0.0" />
   <arg name="station_yaw" default="180.0" />
   <arg name="standoff" default="0.8" />
 
-  <!-- move_base goal sits this far beyond the stage, nose toward it -->
+  <!-- move_base goal sits this far beyond the stage, nose toward it (0.6m stays well in the open corridor) -->
   <arg name="approach" default="0.6" />
   <arg name="move_base_timeout" default="180.0" />
 
@@ -80,8 +80,11 @@
   <arg name="dock_speed" default="0.12" />
   <arg name="transit_speed" default="0.45" />
   <arg name="lift_speed" default="0.08" />
+  <arg name="dock_entry_lat_tol" default="0.015" doc="Lateral tolerance (m) for fork insertion into pallet pocket" />
+  <arg name="reference_frame" default="map" doc="Coordinate frame for precision controllers: map (default) or odom (fallback)" />
 
   <node pkg="amr_navigation" type="milestone2_mission.py" name="milestone2_mission" output="screen">
+    <param name="reference_frame" value="$(arg reference_frame)" />
     <param name="skip_pickup" value="$(arg skip_pickup)" />
     <param name="pick_level" value="$(arg pick_level)" />
     <param name="pallet_x" value="$(arg pallet_x)" />
@@ -100,5 +103,6 @@
     <param name="dock_speed" value="$(arg dock_speed)" />
     <param name="transit_speed" value="$(arg transit_speed)" />
     <param name="lift_speed" value="$(arg lift_speed)" />
+    <param name="dock_entry_lat_tol" value="$(arg dock_entry_lat_tol)" />
   </node>
 </launch>

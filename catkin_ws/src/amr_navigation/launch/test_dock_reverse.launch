@@ -54,9 +54,12 @@
 
   <!-- Pickup Level Profile: "bottom" (level 1), "top" (level 2, upper pallet), "shelf" (level 3) -->
   <arg name="pick_level" default="bottom" />
+  <arg name="reference_frame" default="map" />
+  <arg name="dock_entry_lat_tol" default="0.015" />
 
   <!-- Test Pallet Staging & Reverse Insertion -->
   <node pkg="amr_navigation" type="test_dock_reverse.py" name="test_dock_reverse" output="screen">
+    <param name="reference_frame" value="$(arg reference_frame)" />
     <param name="pallet_x" value="$(arg pallet_x)" />
     <param name="pallet_y" value="$(arg pallet_y)" />
     <param name="dock_yaw" value="$(arg dock_yaw)" />
@@ -66,5 +69,6 @@
     <param name="transit_speed" value="$(arg transit_speed)" />
     <param name="lift_speed" value="$(arg lift_speed)" />
     <param name="pick_level" value="$(arg pick_level)" />
+    <param name="dock_entry_lat_tol" value="$(arg dock_entry_lat_tol)" />
   </node>
 </launch>

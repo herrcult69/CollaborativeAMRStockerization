@@ -29,7 +29,7 @@
   <arg name="base_frame" value="$(eval {'xstack': 'drive_center', 'legacy': 'base_footprint'}[arg('robot_profile')])" />
   <!-- Run after stopping gmapping. Bridge, Unity publishers and mount TF
        remain separate; this launch does not command robot motion. -->
-  <arg name="map_file" default="$(eval find('amr_navigation') + '/maps/' + {'xstack': 'milestone_1_01', 'legacy': 'warehouse_training_01'}[arg('robot_profile')] + '.yaml')" doc="Measured map matching the selected scene; override for subsequent mapping runs" />
+  <arg name="map_file" default="$(eval find('amr_navigation') + '/maps/' + {'xstack': 'milestone_2_01', 'legacy': 'warehouse_training_01'}[arg('robot_profile')] + '.yaml')" doc="Measured map matching the selected scene; override for subsequent mapping runs" />
   <arg name="initial_pose_x" default="0.0" />
   <arg name="initial_pose_y" default="0.0" />
   <arg name="initial_pose_a" default="0.0" />

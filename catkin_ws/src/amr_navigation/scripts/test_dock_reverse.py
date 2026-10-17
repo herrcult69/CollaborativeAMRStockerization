@@ -30,6 +30,8 @@ def run_dock_test():
     transit_speed = float(rospy.get_param("~transit_speed", 0.45))
     lift_speed = float(rospy.get_param("~lift_speed", 0.08))
     standoff = float(rospy.get_param("~standoff", 1.2))
+    reference_frame = str(rospy.get_param("~reference_frame", "map"))
+    dock_entry_lat_tol = float(rospy.get_param("~dock_entry_lat_tol", 0.015))
 
     # Pickup level / height configuration (Standardized Option 1: Uniform 20mm Pallet Lift):
     # "bottom" / "1": entry = -0.020m, pick = +0.010m (lifts pallet 20mm from floor; 12mm headroom under beam)
@@ -76,8 +78,8 @@ def run_dock_test():
     else:
         stage_y = target_drive_y + standoff * math.sin(math.radians(dock_yaw))
 
-    nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65)
-    dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04)
+    nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65, reference_frame=reference_frame)
+    dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04, reference_frame=reference_frame)
     lift = LiftController(default_speed=lift_speed)
 
     rospy.loginfo("==================================================")
@@ -91,7 +93,7 @@ def run_dock_test():
 
     # Step 1: Approach pre-dock staging point
     rospy.loginfo("\n>>> [STEP 1/5] Navigating to Staging Pose (%.2f, %.2f, %.1f deg)...", stage_x, stage_y, dock_yaw)
-    ok = nav.navigate_to(gx=stage_x, gy=stage_y, goal_yaw=dock_yaw, pos_tolerance=0.05, label="Staging Pose")
+    ok = nav.navigate_to(gx=stage_x, gy=stage_y, goal_yaw=dock_yaw, pos_tolerance=0.05, yaw_tolerance=1.5, label="Staging Pose")
     if not ok or rospy.is_shutdown():
         rospy.logwarn("Docking test aborted at Step 1.")
         return
@@ -110,7 +112,7 @@ def run_dock_test():
         dock_yaw=dock_yaw,
         speed=dock_speed,
         pos_tolerance=0.04,
-        entry_lat_tol=0.008,  # ~10 mm fork-to-block clearance per side
+        entry_lat_tol=dock_entry_lat_tol,
         label="Pallet Insertion"
     )
     if not ok or rospy.is_shutdown():

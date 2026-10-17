@@ -33,8 +33,8 @@
 -->
   <param name="/use_sim_time" value="true" />
 
-  <!-- 25cm Tall Staging Station Parameters (Dock target cavity at 13.12, 0.0) -->
-  <arg name="station_x" default="13.12" />
+  <!-- 25cm Tall Staging Station Parameters (Dock target cavity at 13.05, 0.0) -->
+  <arg name="station_x" default="13.05" />
   <arg name="station_y" default="0.0" />
   <arg name="station_yaw" default="180.0" />
   <arg name="fork_offset" default="0.22" />
@@ -52,9 +52,11 @@
   <arg name="dock_speed" default="0.12" />
   <arg name="transit_speed" default="0.45" />
   <arg name="lift_speed" default="0.08" />
+  <arg name="reference_frame" default="map" />
 
   <!-- Pallet Station Undock Reverse Node -->
   <node pkg="amr_navigation" type="test_undock_reverse.py" name="test_undock_reverse" output="screen">
+    <param name="reference_frame" value="$(arg reference_frame)" />
     <param name="station_x" value="$(arg station_x)" />
     <param name="station_y" value="$(arg station_y)" />
     <param name="station_yaw" value="$(arg station_yaw)" />

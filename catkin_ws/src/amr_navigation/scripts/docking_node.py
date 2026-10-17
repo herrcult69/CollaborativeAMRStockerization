@@ -22,15 +22,18 @@ def main():
     speed = float(rospy.get_param("~dock_speed", 0.12))
     tol = float(rospy.get_param("~dock_tolerance", 0.04))
     fork_offset = float(rospy.get_param("~fork_offset", 0.22))
+    reference_frame = str(rospy.get_param("~reference_frame", "map"))
+    entry_lat_tol = float(rospy.get_param("~dock_entry_lat_tol", 0.015))
 
-    controller = PalletDockingController(default_dock_speed=speed, default_tolerance=tol)
+    controller = PalletDockingController(default_dock_speed=speed, default_tolerance=tol, reference_frame=reference_frame)
     try:
         controller.dock_reverse(
             dock_x, dock_y,
             dock_yaw=dock_yaw,
             speed=speed,
             pos_tolerance=tol,
-            fork_offset=fork_offset
+            fork_offset=fork_offset,
+            entry_lat_tol=entry_lat_tol
         )
     finally:
         controller.stop()

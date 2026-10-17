@@ -41,9 +41,11 @@
   <arg name="yaw_tolerance" default="4.0" />    <!-- In DEGREES: 4.0 deg precision -->
   <arg name="max_linear" default="0.35" />      <!-- Linear speed limit (m/s) -->
   <arg name="max_angular" default="0.65" />     <!-- Angular turning limit (rad/s) -->
+  <arg name="reference_frame" default="map" />  <!-- map (default) or odom -->
 
   <!-- Launch Move-To-Point Node -->
   <node pkg="amr_navigation" type="move_to_point_node.py" name="move_to_point_node" output="screen">
+    <param name="reference_frame" value="$(arg reference_frame)" />
     <param name="goal_x" value="$(arg goal_x)" />
     <param name="goal_y" value="$(arg goal_y)" />
     <param name="goal_yaw" value="$(arg goal_yaw)" />

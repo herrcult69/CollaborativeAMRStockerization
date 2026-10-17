@@ -39,12 +39,13 @@ def run_mission():
     corridor_x = float(rospy.get_param("~corridor_x", 4.0))
     corridor_y = float(rospy.get_param("~corridor_y", 0.0))
 
-    # Staging Station / Stocker Target (Located at X=13.12, Y=0.0, 25cm tall)
-    station_x = float(rospy.get_param("~station_x", 13.12))
+    # Staging Station / Stocker Target (Located at X=13.05, Y=0.0, 25cm tall)
+    station_x = float(rospy.get_param("~station_x", 13.05))
     station_y = float(rospy.get_param("~station_y", 0.0))
     station_yaw = float(rospy.get_param("~station_yaw", 180.0))  # Facing West, rear pointing East into dock
     station_standoff = float(rospy.get_param("~station_standoff", rospy.get_param("~standoff", 0.8)))  # Standoff in front of drive_stop pose
     standoff = station_standoff  # Alias for backward compatibility
+    reference_frame = str(rospy.get_param("~reference_frame", "map"))
 
     # Kinematic Speeds
     dock_speed = float(rospy.get_param("~dock_speed", 0.12))
@@ -112,8 +113,8 @@ def run_mission():
 
     # Initialize controllers (if skipping pickup, initial lift assumed ~0.15m)
     initial_lift = 0.15 if skip_pickup else 0.00
-    nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65)
-    dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04)
+    nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65, reference_frame=reference_frame)
+    dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04, reference_frame=reference_frame)
     lift = LiftController(default_speed=lift_speed, initial_height=initial_lift)
 
     rospy.loginfo("==================================================")
@@ -218,7 +219,7 @@ def run_mission():
         target_y=target_deposit_y,
         dock_yaw=station_yaw,
         speed=dock_speed,
-        pos_tolerance=0.04,
+        pos_tolerance=0.08,
         label="Station Reverse Docking"
     )
     if not ok or rospy.is_shutdown():

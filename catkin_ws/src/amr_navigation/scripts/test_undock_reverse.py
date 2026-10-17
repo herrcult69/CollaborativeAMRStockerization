@@ -23,11 +23,12 @@ def run_undock_reverse_test():
     # Physical kinematics: distance from drive_center (tracked by /odom) to fork reference
     fork_offset = float(rospy.get_param("~fork_offset", 0.22))  # deep tine penetration (85-90%)
 
-    # Staging Station / Stocker Target (Located at X=13.12, Y=0.0, 25cm tall)
-    station_x = float(rospy.get_param("~station_x", 13.12))
+    # Staging Station / Stocker Target (Located at X=13.05, Y=0.0, 25cm tall)
+    station_x = float(rospy.get_param("~station_x", 13.05))
     station_y = float(rospy.get_param("~station_y", 0.0))
     station_yaw = float(rospy.get_param("~station_yaw", 180.0))  # Facing West, rear pointing East into dock
     standoff = float(rospy.get_param("~standoff", 0.8))  # Standoff in front of drive_stop pose
+    reference_frame = str(rospy.get_param("~reference_frame", "map"))
 
     # Kinematic Speeds
     dock_speed = float(rospy.get_param("~dock_speed", 0.12))
@@ -65,8 +66,8 @@ def run_undock_reverse_test():
     retreat_x = stage_station_x  # Undock extracts back to pre-dock standoff
 
     # Initialize controllers
-    nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65)
-    dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04)
+    nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65, reference_frame=reference_frame)
+    dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04, reference_frame=reference_frame)
     lift = LiftController(default_speed=lift_speed, initial_height=0.00)
 
     rospy.loginfo("==================================================")
@@ -83,7 +84,7 @@ def run_undock_reverse_test():
     # ---------------------------------------------------------
     rospy.loginfo("\n>>> [STEP 1/6] Navigating to Pre-Dock Staging Pose (%.2f, %.2f, %.1f deg)...",
                   stage_station_x, stage_station_y, station_yaw)
-    ok = nav.navigate_to(gx=stage_station_x, gy=stage_station_y, goal_yaw=station_yaw, pos_tolerance=0.05, label="Station Staging")
+    ok = nav.navigate_to(gx=stage_station_x, gy=stage_station_y, goal_yaw=station_yaw, pos_tolerance=0.06, yaw_tolerance=1.5, label="Station Staging")
     if not ok or rospy.is_shutdown():
         rospy.logwarn("Mission aborted at Station Staging.")
         return
@@ -105,7 +106,7 @@ def run_undock_reverse_test():
         target_y=target_deposit_y,
         dock_yaw=station_yaw,
         speed=dock_speed,
-        pos_tolerance=0.04,
+        pos_tolerance=0.08,
         label="Station Reverse Docking"
     )
     if not ok or rospy.is_shutdown():

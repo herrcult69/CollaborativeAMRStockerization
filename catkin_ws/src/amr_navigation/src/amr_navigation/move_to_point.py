@@ -15,6 +15,12 @@ import rospy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 
+try:
+    import tf2_ros
+    _HAS_TF2 = True
+except ImportError:
+    _HAS_TF2 = False
+
 
 def normalize_angle(angle):
     """Normalize angle to [-pi, pi]."""
@@ -34,7 +40,7 @@ class MoveToPointController:
     STATE_ALIGN_FINAL_YAW = "3_ALIGN_FINAL_YAW"
     STATE_ARRIVED = "4_ARRIVED"
 
-    def __init__(self, max_linear=None, max_angular=None):
+    def __init__(self, max_linear=None, max_angular=None, reference_frame=None):
         # Target coordinates and orientation
         self.gx = float(rospy.get_param("~goal_x", 2.0))
         self.gy = float(rospy.get_param("~goal_y", 0.0))
@@ -62,22 +68,64 @@ class MoveToPointController:
         self.receipt_timeout = float(rospy.get_param("~receipt_timeout", 1.5))
         self.clock_skew_tolerance = float(rospy.get_param("~clock_skew_tolerance", 1.0))
 
+        default_ref = reference_frame if reference_frame is not None else "map"
+        self.reference_frame = str(rospy.get_param("~reference_frame", default_ref))
+        self.robot_frame = str(rospy.get_param("~robot_frame", "drive_center"))
+        self.use_tf = bool(rospy.get_param("~use_tf", _HAS_TF2 and self.reference_frame != "odom"))
+
         self.state = self.STATE_ALIGN_TO_GOAL
         self.lock = threading.Lock()
         self.sample = None
 
+        self.tf_buffer = None
+        self.tf_listener = None
+        if self.use_tf and _HAS_TF2:
+            self.tf_buffer = tf2_ros.Buffer()
+            self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+            rospy.loginfo("[MoveToPointController] Tracking pose via TF: %s -> %s", self.reference_frame, self.robot_frame)
+
         self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
+        # Always keep /odom subscriber as fallback or for direct odom tracking
         self.sub = rospy.Subscriber("/odom", Odometry, self.on_odom, queue_size=1)
         rospy.on_shutdown(self.stop)
 
-    def set_goal(self, gx, gy, goal_yaw=None, pos_tolerance=None):
+    def set_goal(self, gx, gy, goal_yaw=None, pos_tolerance=None, yaw_tolerance=None):
         """Configure target for navigation."""
         self.gx = float(gx)
         self.gy = float(gy)
         self.goal_yaw = deg_to_rad(goal_yaw) if goal_yaw is not None else None
         if pos_tolerance is not None:
             self.pos_tolerance = float(pos_tolerance)
+        if yaw_tolerance is not None:
+            self.yaw_tolerance = math.radians(float(yaw_tolerance))
         self.state = self.STATE_ALIGN_TO_GOAL
+
+    def get_current_pose(self):
+        """
+        Retrieves (x, y, yaw, monotonic_time, stamp_sec).
+        Prioritizes TF lookup in reference_frame (map) if enabled, otherwise falls back to /odom sample.
+        """
+        if self.use_tf and self.tf_buffer is not None:
+            try:
+                trans = self.tf_buffer.lookup_transform(
+                    self.reference_frame,
+                    self.robot_frame,
+                    rospy.Time(0),
+                    rospy.Duration(0.05)
+                )
+                p = trans.transform.translation
+                q = trans.transform.rotation
+                norm = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
+                if norm > 1e-6:
+                    x, y, z, w = q.x / norm, q.y / norm, q.z / norm, q.w / norm
+                    yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+                    return (p.x, p.y, yaw, time.monotonic(), trans.header.stamp.to_sec())
+            except Exception as e:
+                rospy.logwarn_throttle(2, "[MoveToPointController] TF lookup (%s -> %s) waiting: %s",
+                                       self.reference_frame, self.robot_frame, e)
+
+        with self.lock:
+            return self.sample
 
     def on_odom(self, msg):
         if msg.header.frame_id != "odom" or msg.child_frame_id not in ("base_footprint", "base_link", "drive_center"):
@@ -152,8 +200,9 @@ class MoveToPointController:
 
         # Phase 3: Align final orientation
         if self.state == self.STATE_ALIGN_FINAL_YAW:
-            # Closed-loop recovery: if turning on the spot causes position drift beyond tolerance
-            if dist_to_goal > 1.6 * self.pos_tolerance:
+            # Closed-loop recovery: only abort if position drifts significantly beyond tolerance
+            drift_limit = max(0.14, 2.5 * self.pos_tolerance)
+            if dist_to_goal > drift_limit:
                 if abs(heading_error) > 0.65:
                     self.state = self.STATE_ALIGN_TO_GOAL
                 else:
@@ -162,14 +211,17 @@ class MoveToPointController:
                 self.state = self.STATE_ARRIVED
             else:
                 sign = 1.0 if final_yaw_error > 0 else -1.0
-                angular = max(self.min_angular, min(self.max_angular, 1.8 * abs(final_yaw_error))) * sign
+                # Gentler turning speed during in-place final alignment to prevent pallet inertia slip
+                max_align_w = min(self.max_angular, 0.40)
+                min_align_w = min(self.min_angular, 0.28) if abs(final_yaw_error) < 0.20 else self.min_angular
+                angular = max(min_align_w, min(max_align_w, 1.4 * abs(final_yaw_error))) * sign
 
         active_err = final_yaw_error if self.state == self.STATE_ALIGN_FINAL_YAW else heading_error
         return linear, angular, dist_to_goal, active_err, final_yaw_error
 
-    def navigate_to(self, gx, gy, goal_yaw=None, pos_tolerance=None, label="Target"):
+    def navigate_to(self, gx, gy, goal_yaw=None, pos_tolerance=None, yaw_tolerance=None, label="Target"):
         """Blocking call to execute 3-phase navigation to a target."""
-        self.set_goal(gx, gy, goal_yaw, pos_tolerance)
+        self.set_goal(gx, gy, goal_yaw, pos_tolerance, yaw_tolerance)
         rate = rospy.Rate(20)
 
         yaw_str = f"{goal_yaw:.1f} deg" if goal_yaw is not None else "Transit"
@@ -180,12 +232,12 @@ class MoveToPointController:
         stall_counter = 0
 
         while not rospy.is_shutdown():
-            with self.lock:
-                sample = self.sample
+            sample = self.get_current_pose()
 
             if sample is None:
                 self.stop()
-                rospy.logwarn_throttle(2, "Waiting for /odom stream...")
+                rospy.logwarn_throttle(2, "Waiting for pose stream (TF %s->%s or /odom)...",
+                                       self.reference_frame, self.robot_frame)
                 rate.sleep()
                 continue
 

@@ -1,4 +1,4 @@
-﻿# Daily startup — Unity + ROS1 Noetic trong Docker
+# Daily startup — Unity + ROS1 Noetic trong Docker
 
 Quy trình cập nhật ngày 2026-09-25 cho bài **Unity publish /odom → ROS tính điều khiển → Unity nhận /cmd_vel**. Bổ sung xử lý workspace rỗng sau khi bật lại Docker tại [mục 11](#11-workspace-rỗng-sau-khi-bật-lại-docker--sự-cố-ngày-2026-09-25).
 
@@ -492,3 +492,47 @@ Unity biên dịch thành công; kiểm tra batch xác nhận mọi articulation
 - Khi thử `/cmd_vel` trực tiếp, dừng launch navigation và kiểm tra `rostopic info /cmd_vel` không còn `/move_base` phát lệnh. `warehouse_navigation.launch` tự khởi động node này; nút `2D Nav Goal` chỉ gửi goal, không khởi động node.
 - Dừng publisher chưa bảo đảm bánh dừng vì controller giữ target cuối. **[Inside ROS Docker container]** Gửi zero sau mỗi lượt thử: `rostopic pub -1 /cmd_vel geometry_msgs/Twist "{}"`.
 - Còn khoảng 15% sai số quay ở lệnh `0.1` trong bài thử tự động; cấu hình mới tốn thêm CPU. Cần kiểm tra tốc độ simulation thực và thử goal navigation gần, vùng trống. Chưa đánh dấu hoàn tất navigation/né vật cản chỉ từ việc robot quay mượt.
+
+## 14. Milestone 2: Thống nhất hệ tọa độ TF /map và hoàn thành nhiệm vụ Pick-and-Deposit tự động — 2026-10-16
+
+### 14.1 Bối cảnh và mục tiêu
+
+Milestone 2 kết hợp điều hướng vĩ mô tránh vật cản (`move_base` DWA) với điều khiển vi mô cập pallet và nâng hạ (`MoveToPointController`, `PalletDockingController`, `LiftController`). Trước đó, các bộ điều khiển vi mô đăng ký trực tiếp `/odom`, giả định robot xuất phát tại `(0, 0, 0)` khớp gốc bản đồ. Khi robot lệch hoặc bản đồ đổi vị trí mốc, hệ thống bị lệch pha tọa độ.
+
+### 14.2 Các thay đổi kiến trúc và thuật toán
+
+1. **Thống nhất hệ tọa độ qua TF2 (`/map` frame):**
+   - `move_to_point.py` và `docking.py` chuyển sang tra cứu biến đổi tọa độ `map -> drive_center` bằng `tf2_ros.Buffer`, có fallback tự động về `/odom` nếu TF gián đoạn.
+   - Thêm tham số `reference_frame` (mặc định: `map`). Mission giờ đây vận hành trên tọa độ thực tế của nhà kho, không phụ thuộc vị trí spawn ban đầu.
+
+2. **Cập nhật bản đồ và cấu hình AMCL:**
+   - Sử dụng bản đồ đo đạc mới `milestone_2_01.yaml` / `.pgm` làm mặc định trong `warehouse_localization.launch` và `warehouse_autonav.launch`.
+   - Giữ `initial_cov_* = 0.05` để AMCL particle filter hội tụ linh hoạt theo laser scan thực tế từ Unity, tránh kẹt hạt giả tạo khi gốc bản đồ có sai lệch milimet so với điểm spawn.
+   - Tắt rainbow potential cloud trong `warehouse_navigation.launch` (`NavfnROS/visualize_potential: false`) và RViz config để giải phóng băng thông hiển thị.
+
+3. **Khắc phục lỗi DWA kẹt vật cản góc kệ (`cost: -6.000000`):**
+   - Khoảng cách bàn giao `approach` trong `milestone2.launch` được duy trì ở `0.6m`. Với giá trị này, điểm pre-stage nằm ở khoảng $Y = 2.98\text{ m}$ (trung tâm hành lang thoáng). Khi tăng lên `0.8m`, goal bị đẩy sâu vào vùng inflation màu tím ở đầu hồi kệ ($Y = 2.78\text{ m}$), khiến DWA không thể quay thân xe footprint dài 0.91m mà không chạm collider.
+
+4. **Khắc phục hiện tượng quay nhiều vòng tại chỗ khi chở hàng (Leg 5):**
+   - Khi pallet nâng ở độ cao di chuyển $0.28\text{ m}$, khối lượng hàng lớn làm tăng quán tính quay. Lệnh quay tối đa $0.65\text{ rad/s}$ làm bánh xe bị trượt/lết trên sàn Unity PhysX, khiến tâm trục lệch khoảng 1–2 cm.
+   - Ngưỡng kiểm tra trôi cũ (`dist_to_goal > 1.6 * pos_tolerance` = $0.08\text{ m}$) quá nhạy, khiến bộ điều khiển ngắt Phase 3 (`ALIGN_FINAL_YAW`) và quay ngược lại Phase 1 (`ALIGN_TO_GOAL`) với góc lệch $-150^\circ$, tạo thành một vòng xoay 360 độ lặp lại.
+   - **Giải pháp:**
+     - Giới hạn vận tốc quay khi căn chỉnh hướng cuối Phase 3 xuống $\le 0.40\text{ rad/s}$ (và giảm dần về $0.28\text{ rad/s}$ khi cách hướng đích $< 11^\circ$).
+     - Mở rộng ngưỡng trượt cho phép: `drift_limit = max(0.14, 2.5 * self.pos_tolerance)`. Dao động nhỏ do quay trục bánh không còn gây ngắt trạng thái.
+     - Đồng bộ tham số Leg 5 tại bàn thao tác: `pos_tolerance = 0.06m`, `yaw_tolerance = 1.5°`.
+
+5. **Hiệu chỉnh tọa độ bàn đặt hàng (Stocker Station):**
+   - Bàn thao tác trong Unity có collider chặn cơ học ở $X \approx 12.83\text{ m}$. Tọa độ đích `station_x` được chỉnh thành `13.05m` (ứng với điểm dừng tâm trục $12.83\text{ m}$), với dung sai cập bến `pos_tolerance = 0.08m` để robot tiếp xúc phẳng hoàn toàn trước khi hạ càng.
+
+### 14.3 Kết quả kiểm nghiệm thực tế
+
+Nhiệm vụ Milestone 2 đã hoàn thành trọn vẹn end-to-end với log thành công:
+```text
+[LEG 1] move_base -> Rack Pre-Stage: Thành công tới (4.00, 2.98, 90.0 deg)
+[LEG 2] MoveToPoint -> Rack Staging: Căn chỉnh thẳng hàng tại (4.00, 3.58, 270.0 deg)
+[LEG 3] Pick: Hạ càng -0.020m, lùi vào lỗ pallet, nâng 20mm lên 0.010m, rút càng ra hành lang
+[LEG 4] move_base -> Station Pre-Stage: Vận chuyển pallet dọc hành lang tới (11.43, 0.00, 0.0 deg)
+[LEG 5] MoveToPoint -> Stocker Staging: Căn chỉnh êm ái tại (12.03, 0.00, 180.0 deg) không bị quay vòng lặp
+[LEG 6] Deposit: Lùi vào bàn thao tác, hạ càng xuống 0.210m, rút càng và hạ về 0.000m
+SUCCESS: MILESTONE 2 MISSION COMPLETE!
+```

@@ -27,4 +27,5 @@ services:
       - PULSE_SERVER=${PULSE_SERVER:-/mnt/wslg/PulseServer}
       - ROS_IP=127.0.0.1
       - ROS_MASTER_URI=http://127.0.0.1:11311
+      - DISABLE_ROS1_EOL_WARNINGS=1
     command: bash

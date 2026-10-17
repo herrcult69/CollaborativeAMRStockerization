@@ -13,6 +13,12 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from amr_navigation.move_to_point import normalize_angle, deg_to_rad
 
+try:
+    import tf2_ros
+    _HAS_TF2 = True
+except ImportError:
+    _HAS_TF2 = False
+
 
 def compute_dock_target_pose(pallet_x, pallet_y, dock_yaw_deg, fork_offset=0.22):
     """
@@ -75,8 +81,8 @@ def reverse_line_command(x, y, yaw, tx, ty, line_yaw, v_max, k_lat=2.5, max_tilt
     yaw_des = max(-max_tilt, min(max_tilt, math.atan(k_lat * e_lat)))
     # Minimum creep of 0.07 m/s breaks Unity wheel stiction cleanly
     v = -min(v_max, max(0.07, 0.70 * abs(along)))
-    # Tight clamp so the robot cannot swing the forks sideways
-    w = max(-0.18, min(0.18, 1.6 * (yaw_des - e_yaw)))
+    # Dynamic steering clamp: allows clean heading alignment while preventing violent swings
+    w = max(-0.24, min(0.24, 2.2 * (yaw_des - e_yaw)))
     return v, w, along, e_lat, e_yaw
 
 
@@ -86,18 +92,57 @@ class PalletDockingController:
     Designed for fork insertion into pallets where chassis rotation must be strictly prevented.
     """
 
-    def __init__(self, default_dock_speed=0.08, default_tolerance=0.03):
+    def __init__(self, default_dock_speed=0.08, default_tolerance=0.03, reference_frame=None):
         self.default_dock_speed = float(rospy.get_param("~dock_speed", default_dock_speed))
         self.default_tolerance = float(rospy.get_param("~dock_pos_tolerance", default_tolerance))
         self.receipt_timeout = float(rospy.get_param("~receipt_timeout", 1.5))
         self.clock_skew_tolerance = float(rospy.get_param("~clock_skew_tolerance", 1.0))
 
+        default_ref = reference_frame if reference_frame is not None else "map"
+        self.reference_frame = str(rospy.get_param("~reference_frame", default_ref))
+        self.robot_frame = str(rospy.get_param("~robot_frame", "drive_center"))
+        self.use_tf = bool(rospy.get_param("~use_tf", _HAS_TF2 and self.reference_frame != "odom"))
+
         self.lock = threading.Lock()
         self.sample = None
+
+        self.tf_buffer = None
+        self.tf_listener = None
+        if self.use_tf and _HAS_TF2:
+            self.tf_buffer = tf2_ros.Buffer()
+            self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+            rospy.loginfo("[PalletDockingController] Tracking pose via TF: %s -> %s", self.reference_frame, self.robot_frame)
 
         self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
         self.sub = rospy.Subscriber("/odom", Odometry, self.on_odom, queue_size=1)
         rospy.on_shutdown(self.stop)
+
+    def get_current_pose(self):
+        """
+        Retrieves (x, y, yaw, monotonic_time, stamp_sec).
+        Prioritizes TF lookup in reference_frame (map) if enabled, otherwise falls back to /odom sample.
+        """
+        if self.use_tf and self.tf_buffer is not None:
+            try:
+                trans = self.tf_buffer.lookup_transform(
+                    self.reference_frame,
+                    self.robot_frame,
+                    rospy.Time(0),
+                    rospy.Duration(0.05)
+                )
+                p = trans.transform.translation
+                q = trans.transform.rotation
+                norm = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
+                if norm > 1e-6:
+                    x, y, z, w = q.x / norm, q.y / norm, q.z / norm, q.w / norm
+                    yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+                    return (p.x, p.y, yaw, time.monotonic(), trans.header.stamp.to_sec())
+            except Exception as e:
+                rospy.logwarn_throttle(2, "[PalletDockingController] TF lookup (%s -> %s) waiting: %s",
+                                       self.reference_frame, self.robot_frame, e)
+
+        with self.lock:
+            return self.sample
 
     def on_odom(self, msg):
         if msg.header.frame_id != "odom" or msg.child_frame_id not in ("base_footprint", "base_link", "drive_center"):
@@ -162,13 +207,14 @@ class PalletDockingController:
                       tx, ty, f"{dock_yaw:.1f} deg" if dock_yaw is not None else "Current", v_max)
         rospy.loginfo("==================================================")
 
-        # Wait for odom
+        # Wait for pose
         while not rospy.is_shutdown():
-            with self.lock:
-                sample = self.sample
+            sample = self.get_current_pose()
             if sample is not None:
                 break
             self.stop()
+            rospy.logwarn_throttle(2, "[Docking] Waiting for pose stream (TF %s->%s or /odom)...",
+                                   self.reference_frame, self.robot_frame)
             rate.sleep()
 
         if sample is None:
@@ -183,8 +229,7 @@ class PalletDockingController:
         attempts = 0
 
         while not rospy.is_shutdown():
-            with self.lock:
-                sample = self.sample
+            sample = self.get_current_pose()
 
             if sample is None:
                 self.stop()
@@ -263,11 +308,12 @@ class PalletDockingController:
         rospy.loginfo(">>> EXTRACTING FORKS (UNDOCK): %s to (%.2f, %.2f)", label, tx, ty)
 
         while not rospy.is_shutdown():
-            with self.lock:
-                sample = self.sample
+            sample = self.get_current_pose()
 
             if sample is None:
                 self.stop()
+                rospy.logwarn_throttle(2, "[Undock] Waiting for pose stream (TF %s->%s or /odom)...",
+                                       self.reference_frame, self.robot_frame)
                 rate.sleep()
                 continue
 

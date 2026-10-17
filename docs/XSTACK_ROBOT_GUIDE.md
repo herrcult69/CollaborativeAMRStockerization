@@ -19,7 +19,7 @@ The legacy robot model remains supported in parallel via `robot_profile:=legacy`
 
 ## 2. Coordinate Frame & TF Architecture
 
-### 2.1 The `drive_center` Reference Contract
+### 2.1 The `drive_center` Reference Contract 
 In differential-drive kinematics, the Instantaneous Center of Rotation (ICR / fulcrum) lies on the axis passing through the drive wheels. 
 * **`drive_center`**: The ground-projected midpoint of the drive axle ($Z = 0.0\text{ m}$). In Unity, this is tracked by the helper object `drive_centre` and published over `/odom`.
 * **`base_link`**: The structural front chassis origin, located **$0.10\text{ m}$ ahead** ($+X$) of `drive_center`.
