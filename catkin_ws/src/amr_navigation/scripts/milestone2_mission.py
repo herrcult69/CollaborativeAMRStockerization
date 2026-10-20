@@ -8,16 +8,86 @@ Control alternates, one /cmd_vel publisher at a time:
   Docking / Lift                   -> pick or deposit, exactly as Milestone 1
 
 Requires unity_bridge, laser_tf, warehouse_localization (AMCL) and warehouse_navigation (move_base).
-Precision legs use /odom coordinates; valid while the robot spawns at the map origin (map ~= odom).
+Targets are defined in map. At each move_base -> precision handoff the map->odom transform is read
+once from AMCL and frozen; the precision controllers then run on smooth /odom against converted targets.
+At the rack the robot stops facing the pallet and measures its load face with the laser; docking then
+follows the detected pallet, not the map target (abort if detection fails or disagrees by > 10 cm / 5 deg).
 """
 import math
 import actionlib
 import rospy
+import tf2_ros
 from actionlib_msgs.msg import GoalStatus
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+from sensor_msgs.msg import LaserScan
 from amr_navigation.move_to_point import MoveToPointController
-from amr_navigation.docking import PalletDockingController, compute_dock_target_pose, compute_prestage_pose
+from amr_navigation.docking import (PalletDockingController, compute_dock_target_pose, compute_prestage_pose,
+                                    map_pose_to_odom)
 from amr_navigation.lift import LiftController
+from amr_navigation.pallet_detect import detect_load_face, scan_to_points
+
+TF_ERRORS = (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException)
+
+
+def quat_yaw(q):
+    return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+
+def snapshot_map_to_odom(tf_buffer, nav, settle, label):
+    """Read odom<-map once after the robot has stopped. Returns (dx, dy, dth) or None (robot stopped)."""
+    rospy.sleep(settle)
+    try:
+        t = tf_buffer.lookup_transform("odom", "map", rospy.Time(0), rospy.Duration(2.0))
+    except TF_ERRORS as e:
+        nav.stop()
+        rospy.logerr(">>> MAP->ODOM SNAPSHOT FAILED: %s (%s). Is AMCL running?", label, e)
+        return None
+    dth = quat_yaw(t.transform.rotation)
+    dx, dy = t.transform.translation.x, t.transform.translation.y
+    rospy.loginfo(">>> MAP->ODOM SNAPSHOT: %s | dx=%.3f dy=%.3f dth=%.2f deg", label, dx, dy, math.degrees(dth))
+    return dx, dy, dth
+
+
+def detect_pallet(tf_buffer, expected, width, face_offset, scans=5):
+    """
+    Measure the pallet from its load face in odom over several scans (robot standing still, facing it).
+    Returns (x, y, dock_yaw_deg) in odom, or None after logging why.
+    """
+    rospy.sleep(0.5)
+    found = []
+    for _ in range(scans):
+        try:
+            scan = rospy.wait_for_message("/scan", LaserScan, timeout=2.0)
+            t = tf_buffer.lookup_transform("odom", scan.header.frame_id, rospy.Time(0), rospy.Duration(0.5))
+        except (rospy.ROSException,) + TF_ERRORS as e:
+            rospy.logwarn("[Detect] scan/TF unavailable: %s", e)
+            continue
+        pts = scan_to_points(scan.ranges, scan.angle_min, scan.angle_increment, scan.range_min, scan.range_max,
+                             t.transform.translation.x, t.transform.translation.y, quat_yaw(t.transform.rotation))
+        pose, why = detect_load_face(pts, expected[0], expected[1], expected[2], width=width, face_offset=face_offset)
+        if pose is None:
+            rospy.logwarn("[Detect] scan rejected: %s", why)
+        else:
+            found.append(pose)
+    if len(found) < 3:
+        rospy.logerr(">>> PALLET DETECTION FAILED: %d/%d scans found the load face.", len(found), scans)
+        return None
+    n = float(len(found))
+    mx, my = sum(p[0] for p in found) / n, sum(p[1] for p in found) / n
+    myaw = sum(p[2] for p in found) / n
+    spread = max(math.hypot(p[0] - mx, p[1] - my) for p in found)
+    spread_yaw = max(abs(p[2] - myaw) for p in found)
+    if spread > 0.005 or spread_yaw > 1.0:  # 3 mm range noise alone gives ~0.7 deg per scan
+        rospy.logerr(">>> PALLET DETECTION FAILED: scans disagree (%.1f mm, %.2f deg).", spread * 1000.0, spread_yaw)
+        return None
+    ux, uy = math.cos(math.radians(expected[2])), math.sin(math.radians(expected[2]))
+    lat = -(mx - expected[0]) * uy + (my - expected[1]) * ux
+    depth = (mx - expected[0]) * ux + (my - expected[1]) * uy
+    rospy.loginfo(">>> PALLET DETECTED (odom): (%.3f, %.3f, %.2f deg) | expected (%.3f, %.3f, %.2f) | "
+                  "lateral %+.1f mm, depth %+.1f mm, yaw %+.2f deg | %d scans",
+                  mx, my, myaw, expected[0], expected[1], expected[2],
+                  lat * 1000.0, depth * 1000.0, myaw - expected[2], len(found))
+    return mx, my, myaw
 
 
 def move_base_to(client, nav, x, y, yaw_deg, timeout, label):
@@ -103,6 +173,15 @@ def run_mission():
     nav = MoveToPointController(max_linear=transit_speed, max_angular=0.65)
     dock = PalletDockingController(default_dock_speed=dock_speed, default_tolerance=0.04)
     lift = LiftController(default_speed=lift_speed, initial_height=initial_lift)
+    tf_buffer = tf2_ros.Buffer()
+    tf_listener = tf2_ros.TransformListener(tf_buffer)  # noqa: F841 (keeps the buffer filled)
+    snapshot_settle = float(rospy.get_param("~snapshot_settle", 1.0))
+    use_detection = bool(rospy.get_param("~detect_pallet", True))
+    load_width = float(rospy.get_param("~load_width", 0.35))              # load box front face width (m)
+    # pallet_x/y is the tuned docking reference (dock stops fork_offset before it), not the pallet centre.
+    # Milestone_1 rack: centre ~0.12 m deeper, box face 0.15 m in front of the centre -> 0.03 m in front of the
+    # reference. Docking depth therefore stays as tuned; lateral and heading come from the measured face.
+    load_face_offset = float(rospy.get_param("~load_face_offset", 0.03))
 
     client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
     rospy.loginfo("Waiting for move_base action server...")
@@ -131,8 +210,38 @@ def run_mission():
         if not move_base_to(client, nav, pre_rack[0], pre_rack[1], pre_rack[2], move_base_timeout, "Rack Pre-Stage"):
             return
 
+        T = snapshot_map_to_odom(tf_buffer, nav, snapshot_settle, "Rack")
+        if T is None:
+            return
+        stage_o = map_pose_to_odom(stage_rack_x, stage_rack_y, dock_yaw, *T)
+        dock_o = map_pose_to_odom(target_rack_x, target_rack_y, dock_yaw, *T)
+
         rospy.loginfo("\n>>> [LEG 2] MoveToPoint -> Rack Staging")
-        ok = nav.navigate_to(gx=stage_rack_x, gy=stage_rack_y, goal_yaw=dock_yaw, pos_tolerance=0.05, label="Rack Staging")
+        if use_detection:
+            # Stop square to the rack (dock heading + 180, e.g. +90 deg for a 270 deg dock) so the laser
+            # looks straight at the load, then turn for the reverse
+            ok = nav.navigate_to(gx=stage_o[0], gy=stage_o[1], goal_yaw=(stage_o[2] + 180.0) % 360.0,
+                                 pos_tolerance=0.05, yaw_tolerance=2.0, label="Rack Staging (facing pallet)")
+            if not ok or rospy.is_shutdown():
+                rospy.logwarn("Mission aborted at Rack Staging.")
+                return
+            pallet_o = map_pose_to_odom(pallet_x, pallet_y, dock_yaw, *T)
+            det = detect_pallet(tf_buffer, pallet_o, load_width, load_face_offset)
+            if det is None:
+                nav.stop()
+                rospy.logerr("Mission aborted: pallet not confirmed by the laser.")
+                return
+            line_yaw = math.radians(det[2])
+            dock_o = compute_dock_target_pose(det[0], det[1], det[2], fork_offset) + (det[2],)
+            turn_at = stage_o
+            stage_o = (dock_o[0] + rack_standoff * math.cos(line_yaw),
+                       dock_o[1] + rack_standoff * math.sin(line_yaw), det[2])
+            # Turn in place where the robot stands; dock_reverse then line-follows onto the detected axis
+            ok = nav.navigate_to(gx=turn_at[0], gy=turn_at[1], goal_yaw=det[2], pos_tolerance=0.08,
+                                 label="Rack Staging (turn)")
+        else:
+            ok = nav.navigate_to(gx=stage_o[0], gy=stage_o[1], goal_yaw=stage_o[2], pos_tolerance=0.05,
+                                 label="Rack Staging")
         if not ok or rospy.is_shutdown():
             rospy.logwarn("Mission aborted at Rack Staging.")
             return
@@ -140,9 +249,9 @@ def run_mission():
         rospy.loginfo("\n>>> [LEG 3] Pick: entry height %.3fm, reverse, lift, extract", ENTRY_LIFT_HEIGHT)
         lift.set_height(ENTRY_LIFT_HEIGHT, speed=0.06)
         ok = dock.dock_reverse(
-            target_x=target_rack_x,
-            target_y=target_rack_y,
-            dock_yaw=dock_yaw,
+            target_x=dock_o[0],
+            target_y=dock_o[1],
+            dock_yaw=dock_o[2],
             speed=dock_speed,
             pos_tolerance=0.04,
             entry_lat_tol=0.008,  # ~10 mm fork-to-block clearance per side
@@ -154,9 +263,9 @@ def run_mission():
 
         lift.set_height(PICK_LIFT_HEIGHT, speed=0.04)
         ok = dock.undock(
-            target_x=stage_rack_x,
-            target_y=stage_rack_y,
-            dock_yaw=dock_yaw,
+            target_x=stage_o[0],
+            target_y=stage_o[1],
+            dock_yaw=stage_o[2],
             speed=0.10,
             pos_tolerance=0.05,
             label="Rack Extraction"
@@ -177,8 +286,14 @@ def run_mission():
     if not move_base_to(client, nav, pre_station[0], pre_station[1], pre_station[2], move_base_timeout, "Station Pre-Stage"):
         return
 
+    T = snapshot_map_to_odom(tf_buffer, nav, snapshot_settle, "Station")
+    if T is None:
+        return
+    stage_o = map_pose_to_odom(stage_station_x, stage_station_y, station_yaw, *T)
+    dock_o = map_pose_to_odom(target_deposit_x, target_deposit_y, station_yaw, *T)
+
     rospy.loginfo("\n>>> [LEG 5] MoveToPoint -> Stocker Staging")
-    ok = nav.navigate_to(gx=stage_station_x, gy=stage_station_y, goal_yaw=station_yaw, pos_tolerance=0.05, label="Stocker Staging")
+    ok = nav.navigate_to(gx=stage_o[0], gy=stage_o[1], goal_yaw=stage_o[2], pos_tolerance=0.05, label="Stocker Staging")
     if not ok or rospy.is_shutdown():
         rospy.logwarn("Mission aborted at Stocker Staging.")
         return
@@ -189,9 +304,9 @@ def run_mission():
     rospy.loginfo("\n>>> [LEG 6] Deposit: reverse onto station, lower to %.2fm, extract", DEPOSIT_LIFT_HEIGHT)
     lift.set_height(TRANSIT_LIFT_HEIGHT, speed=0.04)
     ok = dock.dock_reverse(
-        target_x=target_deposit_x,
-        target_y=target_deposit_y,
-        dock_yaw=station_yaw,
+        target_x=dock_o[0],
+        target_y=dock_o[1],
+        dock_yaw=dock_o[2],
         speed=dock_speed,
         pos_tolerance=0.04,
         label="Station Reverse Docking"
@@ -204,9 +319,9 @@ def run_mission():
     rospy.sleep(0.5)  # let PhysX contact settle
 
     ok = dock.undock(
-        target_x=stage_station_x,
-        target_y=stage_station_y,
-        dock_yaw=station_yaw,
+        target_x=stage_o[0],
+        target_y=stage_o[1],
+        dock_yaw=stage_o[2],
         speed=0.10,
         pos_tolerance=0.05,
         label="Station Undock Extraction"

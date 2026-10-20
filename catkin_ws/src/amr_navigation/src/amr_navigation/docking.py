@@ -56,6 +56,16 @@ def compute_prestage_pose(stage_x, stage_y, dock_yaw_deg, approach=0.6):
             (float(dock_yaw_deg) + 180.0) % 360.0)
 
 
+def map_pose_to_odom(x, y, yaw_deg, dx, dy, dth):
+    """
+    Express a map-frame pose in odom using a frozen odom<-map transform
+    (translation dx, dy and rotation dth in radians, as returned by lookup_transform("odom", "map")).
+    :return: (x, y, yaw_deg) in odom
+    """
+    c, s = math.cos(dth), math.sin(dth)
+    return dx + c * x - s * y, dy + s * x + c * y, float(yaw_deg) + math.degrees(dth)
+
+
 def reverse_line_command(x, y, yaw, tx, ty, line_yaw, v_max, k_lat=2.5, max_tilt=math.radians(10.0)):
     """
     Control law for reversing onto the pallet axis: the line through (tx, ty) along line_yaw.

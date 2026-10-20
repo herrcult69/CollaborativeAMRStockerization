@@ -13,7 +13,7 @@ if os.path.isdir(_pkg_src) and _pkg_src not in sys.path:
     sys.path.insert(0, _pkg_src)
 
 from amr_navigation.move_to_point import normalize_angle, deg_to_rad
-from amr_navigation.docking import PalletDockingController, compute_dock_target_pose, compute_dock_base_pose, reverse_line_command, compute_prestage_pose
+from amr_navigation.docking import PalletDockingController, compute_dock_target_pose, compute_dock_base_pose, reverse_line_command, compute_prestage_pose, map_pose_to_odom
 
 
 class PalletDockingTests(unittest.TestCase):
@@ -101,6 +101,19 @@ class PalletDockingTests(unittest.TestCase):
             self.assertLess(abs(e_lat_gate), 0.008)
             self.assertLess(abs(tip_lat_gate), 0.008)
             self.assertLess(abs(e_lat), 0.005)
+
+    def test_map_pose_to_odom(self):
+        # Spawn at the map origin: identity snapshot leaves the target unchanged
+        x, y, yaw = map_pose_to_odom(4.0, 4.78, 270.0, 0.0, 0.0, 0.0)
+        self.assertAlmostEqual(x, 4.0, places=6)
+        self.assertAlmostEqual(y, 4.78, places=6)
+        self.assertAlmostEqual(yaw, 270.0, places=6)
+        # Spawn at map (2.0, 1.0) facing 90 deg -> odom<-map = translation (-1.0, 2.0), rotation -90 deg.
+        # Rack dock (4.00, 4.78, 270) is 3.78 m ahead and 2.00 m right of the spawn, facing backward.
+        x, y, yaw = map_pose_to_odom(4.0, 4.78, 270.0, -1.0, 2.0, math.radians(-90.0))
+        self.assertAlmostEqual(x, 3.78, places=6)
+        self.assertAlmostEqual(y, -2.00, places=6)
+        self.assertAlmostEqual(normalize_angle(math.radians(yaw)), normalize_angle(math.radians(180.0)), places=6)
 
     def test_prestage_faces_stage(self):
         # Rack stage (4.00, 3.58) docking at 270 deg -> pre-stage below it, nose up toward the rack

@@ -51,7 +51,7 @@ class RobotProfileTests(unittest.TestCase):
             self.load("warehouse_navigation.launch", "typo")
 
     def test_localization_selects_measured_map_and_allows_override(self):
-        for profile, filename in [("xstack", "milestone_1_01.yaml"), ("legacy", "warehouse_training_01.yaml")]:
+        for profile, filename in [("xstack", "milestone_3_02.yaml"), ("legacy", "warehouse_training_01.yaml")]:
             config = self.load("warehouse_localization.launch", profile)
             server = next(n for n in config.nodes if n.type == "map_server")
             self.assertIn(filename, server.args)

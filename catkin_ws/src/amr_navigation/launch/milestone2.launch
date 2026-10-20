@@ -27,7 +27,7 @@
     dock_yaw            : Approach heading in degrees (270.0 for North racks, 90.0 for South shelves)
     fork_offset         : Drive center to tine reference offset (default: 0.22m)
     rack_standoff       : Pre-dock runway distance for rack entry (default: 1.2m)
-    station_x, y        : Staging station deck position (default: 13.12, 0.0)
+    station_x, y        : Staging station deck position on the map (default: 13.12, 0.0)
     station_yaw         : Heading for station deposit (default: 180.0 deg)
     standoff            : Pre-dock standoff distance from station dock (default: 0.8m)
     approach            : Handover margin from move_base goal to stage pose (default: 0.6m)
@@ -71,6 +71,8 @@
 
   <!-- move_base goal sits this far beyond the stage, nose toward it -->
   <arg name="approach" default="0.6" />
+  <!-- Measure the pallet load face with the laser at the rack stage; abort if not confirmed -->
+  <arg name="detect_pallet" default="true" />
   <arg name="move_base_timeout" default="180.0" />
 
   <arg name="transit_lift_height" default="0.28" />
@@ -94,6 +96,7 @@
     <param name="station_yaw" value="$(arg station_yaw)" />
     <param name="standoff" value="$(arg standoff)" />
     <param name="approach" value="$(arg approach)" />
+    <param name="detect_pallet" value="$(arg detect_pallet)" />
     <param name="move_base_timeout" value="$(arg move_base_timeout)" />
     <param name="transit_lift_height" value="$(arg transit_lift_height)" />
     <param name="deposit_lift_height" value="$(arg deposit_lift_height)" />

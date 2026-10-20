@@ -224,7 +224,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 8.995430946350098
+      Distance: 10.52029800415039
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -240,9 +240,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.5699998736381531
+      Pitch: 0.6797960996627808
       Target Frame: <Fixed Frame>
-      Yaw: 3.014998435974121
+      Yaw: 3.0049991607666016
     Saved: ~
 Window Geometry:
   Displays:
@@ -252,5 +252,5 @@ Window Geometry:
   Hide Right Dock: false
   QMainWindow State: 000000ff00000000fd000000010000000000000156000002cafc0200000001fb000000100044006900730070006c006100790073010000003b000002ca000000c700ffffff00000354000002ca00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Width: 1200
-  X: 68
-  Y: 68
+  X: 36
+  Y: 36
