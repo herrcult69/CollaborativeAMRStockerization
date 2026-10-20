@@ -8,7 +8,8 @@ Control alternates, one /cmd_vel publisher at a time:
   Docking / Lift                   -> pick or deposit, exactly as Milestone 1
 
 Requires unity_bridge, laser_tf, warehouse_localization (AMCL) and warehouse_navigation (move_base).
-Targets are defined in map. At each move_base -> precision handoff the map->odom transform is read
+The package and station are named entries of config/locations_*.yaml (object centres in map).
+At each move_base -> precision handoff the map->odom transform is read
 once from AMCL and frozen; the precision controllers then run on smooth /odom against converted targets.
 At the rack the robot stops facing the pallet and measures its load face with the laser; docking then
 follows the detected pallet, not the map target (abort if detection fails or disagrees by > 10 cm / 5 deg).
@@ -24,6 +25,7 @@ from amr_navigation.move_to_point import MoveToPointController
 from amr_navigation.docking import (PalletDockingController, compute_dock_target_pose, compute_prestage_pose,
                                     map_pose_to_odom)
 from amr_navigation.lift import LiftController
+from amr_navigation.locations import FLOOR_MAX_HEIGHT, find_location
 from amr_navigation.pallet_detect import detect_load_face, scan_to_points
 
 TF_ERRORS = (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException)
@@ -120,14 +122,17 @@ def run_mission():
 
     skip_pickup = bool(rospy.get_param("~skip_pickup", False))
 
-    pallet_x = float(rospy.get_param("~pallet_x", 4.0))
-    pallet_y = float(rospy.get_param("~pallet_y", 5.0))
-    dock_yaw = float(rospy.get_param("~dock_yaw", 270.0))
-    fork_offset = float(rospy.get_param("~fork_offset", 0.22))
+    # Named object centres from config/locations_*.yaml (loaded into ~packages / ~stations by the launch file)
+    package = str(rospy.get_param("~package", "package_5"))
+    station = str(rospy.get_param("~station", "station_2"))
+    pallet_x, pallet_y, dock_yaw, pallet_h = find_location(rospy.get_param("~packages", {}), package)
+    station_x, station_y, station_yaw, _ = find_location(rospy.get_param("~stations", {}), station)
+    # drive_center stops this far in front of the object centre when docked (see compute_dock_target_pose)
+    pallet_dock_offset = float(rospy.get_param("~pallet_dock_offset", 0.342))
+    station_dock_offset = float(rospy.get_param("~station_dock_offset", 0.54))
+    # Touching the station this close to the stop counts as docked (stall guard in dock_reverse)
+    station_contact_tol = float(rospy.get_param("~station_contact_tol", 0.10))
 
-    station_x = float(rospy.get_param("~station_x", 13.12))
-    station_y = float(rospy.get_param("~station_y", 0.0))
-    station_yaw = float(rospy.get_param("~station_yaw", 180.0))
     standoff = float(rospy.get_param("~standoff", 0.8))
     rack_standoff = float(rospy.get_param("~rack_standoff", 1.2))
 
@@ -157,14 +162,20 @@ def run_mission():
         TRANSIT_LIFT_HEIGHT = float(raw_transit)
     DEPOSIT_LIFT_HEIGHT = float(rospy.get_param("~deposit_lift_height", 0.21))
 
+    # The bottom lift profile and the laser detection (0.13 m scan plane) only fit floor pallets
+    if not skip_pickup and pick_level not in ("top", "upper", "2", "shelf", "3") and pallet_h > FLOOR_MAX_HEIGHT:
+        rospy.logerr("%s sits on an upper rack level (%.2f m); pick_level bottom picks floor pallets only.",
+                     package, pallet_h)
+        return
+
     # Rack poses: dock target -> stage (rack_standoff) -> pre-stage
-    target_rack_x, target_rack_y = compute_dock_target_pose(pallet_x, pallet_y, dock_yaw, fork_offset)
+    target_rack_x, target_rack_y = compute_dock_target_pose(pallet_x, pallet_y, dock_yaw, pallet_dock_offset)
     stage_rack_x = target_rack_x + rack_standoff * math.cos(math.radians(dock_yaw))
     stage_rack_y = target_rack_y + rack_standoff * math.sin(math.radians(dock_yaw))
     pre_rack = compute_prestage_pose(stage_rack_x, stage_rack_y, dock_yaw, approach)
 
     # Station poses
-    target_deposit_x, target_deposit_y = compute_dock_target_pose(station_x, station_y, station_yaw, fork_offset)
+    target_deposit_x, target_deposit_y = compute_dock_target_pose(station_x, station_y, station_yaw, station_dock_offset)
     stage_station_x = target_deposit_x + standoff * math.cos(math.radians(station_yaw))
     stage_station_y = target_deposit_y + standoff * math.sin(math.radians(station_yaw))
     pre_station = compute_prestage_pose(stage_station_x, stage_station_y, station_yaw, approach)
@@ -178,10 +189,8 @@ def run_mission():
     snapshot_settle = float(rospy.get_param("~snapshot_settle", 1.0))
     use_detection = bool(rospy.get_param("~detect_pallet", True))
     load_width = float(rospy.get_param("~load_width", 0.35))              # load box front face width (m)
-    # pallet_x/y is the tuned docking reference (dock stops fork_offset before it), not the pallet centre.
-    # Milestone_1 rack: centre ~0.12 m deeper, box face 0.15 m in front of the centre -> 0.03 m in front of the
-    # reference. Docking depth therefore stays as tuned; lateral and heading come from the measured face.
-    load_face_offset = float(rospy.get_param("~load_face_offset", 0.03))
+    # Load box front face, measured from the pallet centre toward the aisle (box 0.30 m deep, centred)
+    load_face_offset = float(rospy.get_param("~load_face_offset", 0.15))
 
     client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
     rospy.loginfo("Waiting for move_base action server...")
@@ -192,6 +201,8 @@ def run_mission():
     rospy.loginfo("==================================================")
     rospy.loginfo("STARTING MILESTONE 2 MISSION (move_base + precision docking)")
     rospy.loginfo("Mode              : %s", "Skip Pickup" if skip_pickup else "Full Pick-and-Deliver")
+    rospy.loginfo("Package / station : %s (%.3f, %.3f, %.1f) / %s (%.3f, %.3f, %.1f)",
+                  package, pallet_x, pallet_y, dock_yaw, station, station_x, station_y, station_yaw)
     rospy.loginfo("Rack   pre-stage  : (%.2f, %.2f, %.1f) -> stage (%.2f, %.2f, %.1f) -> dock (%.2f, %.2f)",
                   pre_rack[0], pre_rack[1], pre_rack[2], stage_rack_x, stage_rack_y, dock_yaw,
                   target_rack_x, target_rack_y)
@@ -232,7 +243,7 @@ def run_mission():
                 rospy.logerr("Mission aborted: pallet not confirmed by the laser.")
                 return
             line_yaw = math.radians(det[2])
-            dock_o = compute_dock_target_pose(det[0], det[1], det[2], fork_offset) + (det[2],)
+            dock_o = compute_dock_target_pose(det[0], det[1], det[2], pallet_dock_offset) + (det[2],)
             turn_at = stage_o
             stage_o = (dock_o[0] + rack_standoff * math.cos(line_yaw),
                        dock_o[1] + rack_standoff * math.sin(line_yaw), det[2])
@@ -309,6 +320,7 @@ def run_mission():
         dock_yaw=dock_o[2],
         speed=dock_speed,
         pos_tolerance=0.04,
+        contact_tol=station_contact_tol,
         label="Station Reverse Docking"
     )
     if not ok or rospy.is_shutdown():
@@ -334,8 +346,7 @@ def run_mission():
 
     rospy.loginfo("\n==================================================")
     rospy.loginfo("SUCCESS: MILESTONE 2 MISSION COMPLETE!")
-    rospy.loginfo("Pallet picked from rack (%.2f, %.2f) and deposited on station (%.2f, %.2f).",
-                  pallet_x, pallet_y, station_x, station_y)
+    rospy.loginfo("%s picked from the rack and deposited on %s.", package, station)
     rospy.loginfo("==================================================")
 
 

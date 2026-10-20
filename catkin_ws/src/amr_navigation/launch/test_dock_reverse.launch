@@ -12,17 +12,17 @@
     5. Rack Extraction : Pulls forward out of rack to standoff, sets transit height (0.150m)
 
   ARGUMENTS:
-    pallet_x, pallet_y  : Target pallet cavity center coordinates (default: 4.0, 5.0)
-    dock_yaw            : Approach heading in degrees (270.0 for North racks, 90.0 for South shelves)
+    package             : Pallet to pick, named in locations_file (default: package_5)
+    locations_file      : Named object centres + dock headings, exported from Unity (Tools > Export ROS Locations)
     dock_speed          : Reverse creep speed limit (default: 0.12 m/s; clamp >= 0.07 m/s prevents stiction)
-    fork_offset         : Drive center to tine reference offset (0.22m = 85-90% tine penetration)
+    pallet_dock_offset  : drive_center stop in front of the pallet centre (default: 0.342m = 85-90% tine penetration)
     standoff            : Pre-dock staging runway distance (default: 1.2m)
     transit_speed       : Max forward navigation speed to staging point (default: 0.45 m/s)
     lift_speed          : Mast elevation vertical speed (default: 0.08 m/s)
     pick_level          : "bottom" / "1" (floor stack), "top" / "2" (upper stack), "shelf" / "3" (tier 2)
 
   COMMON USAGE EXAMPLES:
-    # 1. Run default rack docking test at (4.0, 5.0) facing 270 deg (bottom level):
+    # 1. Run default rack docking test on package_5 (bottom level):
     roslaunch amr_navigation test_dock_reverse.launch
 
     # 2. Pick upper pallet (second height) of a double stack:
@@ -31,21 +31,23 @@
     # 3. Pick pallet from elevated second-tier rack shelf:
     roslaunch amr_navigation test_dock_reverse.launch pick_level:=shelf
 
-    # 4. Pick from opposite-side shelf (facing 90 deg North):
-    roslaunch amr_navigation test_dock_reverse.launch pallet_x:=4.0 pallet_y:=-5.0 dock_yaw:=90.0
+    # 4. Pick from the opposite-side south rack (facing 90 deg):
+    roslaunch amr_navigation test_dock_reverse.launch package:=package_101
 
-    # 5. Custom pallet location, penetration depth, and creep speed:
-    roslaunch amr_navigation test_dock_reverse.launch pallet_x:=6.0 pallet_y:=5.0 dock_yaw:=270.0 fork_offset:=0.22 dock_speed:=0.12
+    # 5. Another pallet, penetration depth, and creep speed:
+    roslaunch amr_navigation test_dock_reverse.launch package:=package_21 pallet_dock_offset:=0.342 dock_speed:=0.12
   =============================================================================
 -->
   <param name="/use_sim_time" value="true" />
 
-  <!-- Pallet Target & Staging Parameters -->
-  <arg name="pallet_x" default="4.0" />
-  <arg name="pallet_y" default="5.0" />
-  <arg name="dock_yaw" default="270.0" />
+  <!-- Named locations: object centres in map, exported from Unity (Tools > Export ROS Locations) -->
+  <arg name="locations_file" default="$(find amr_navigation)/config/locations_milestone_3.yaml" />
+  <arg name="package" default="package_5" />
+  <!-- drive_center stops this far in front of the pallet centre when docked -->
+  <arg name="pallet_dock_offset" default="0.342" />
+
+  <!-- Staging Parameters -->
   <arg name="dock_speed" default="0.12" />
-  <arg name="fork_offset" default="0.22" />
   <arg name="standoff" default="1.2" />
 
   <!-- Kinematic Speeds -->
@@ -57,11 +59,10 @@
 
   <!-- Test Pallet Staging & Reverse Insertion -->
   <node pkg="amr_navigation" type="test_dock_reverse.py" name="test_dock_reverse" output="screen">
-    <param name="pallet_x" value="$(arg pallet_x)" />
-    <param name="pallet_y" value="$(arg pallet_y)" />
-    <param name="dock_yaw" value="$(arg dock_yaw)" />
+    <rosparam command="load" file="$(arg locations_file)" />
+    <param name="package" value="$(arg package)" />
+    <param name="pallet_dock_offset" value="$(arg pallet_dock_offset)" />
     <param name="dock_speed" value="$(arg dock_speed)" />
-    <param name="fork_offset" value="$(arg fork_offset)" />
     <param name="standoff" value="$(arg standoff)" />
     <param name="transit_speed" value="$(arg transit_speed)" />
     <param name="lift_speed" value="$(arg lift_speed)" />

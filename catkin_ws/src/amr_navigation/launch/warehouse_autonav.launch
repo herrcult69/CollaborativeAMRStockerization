@@ -21,7 +21,7 @@
          roslaunch amr_navigation warehouse_autonav.launch launch_mission:=true
       5. Run mission with upper pallet or opposite-side shelf (facing 90 deg North):
          roslaunch amr_navigation warehouse_autonav.launch launch_mission:=true pick_level:=shelf
-         roslaunch amr_navigation warehouse_autonav.launch launch_mission:=true dock_yaw:=90.0 pallet_y:=-5.0
+         roslaunch amr_navigation warehouse_autonav.launch launch_mission:=true package:=package_101
     =============================================================================
   -->
   <param name="/use_sim_time" value="true" />
@@ -42,13 +42,11 @@
   <!-- Mission parameters (used if launch_mission:=true) -->
   <arg name="skip_pickup" default="false" />
   <arg name="pick_level" default="bottom" />
-  <arg name="pallet_x" default="4.0" />
-  <arg name="pallet_y" default="5.0" />
-  <arg name="dock_yaw" default="270.0" />
+  <!-- Named locations: object centres in map, exported from Unity (Tools > Export ROS Locations) -->
+  <arg name="locations_file" default="$(find amr_navigation)/config/locations_milestone_3.yaml" />
+  <arg name="package" default="package_5" />
+  <arg name="station" default="station_2" />
   <arg name="rack_standoff" default="1.2" />
-  <arg name="station_x" default="13.12" />
-  <arg name="station_y" default="0.0" />
-  <arg name="station_yaw" default="180.0" />
 
   <!-- 1. Unity Bridge (ROS-TCP-Endpoint) -->
   <include file="$(find amr_navigation)/launch/unity_bridge.launch" />
@@ -81,12 +79,9 @@
         name="milestone2_mission" output="screen">
     <param name="skip_pickup" value="$(arg skip_pickup)" />
     <param name="pick_level" value="$(arg pick_level)" />
-    <param name="pallet_x" value="$(arg pallet_x)" />
-    <param name="pallet_y" value="$(arg pallet_y)" />
-    <param name="dock_yaw" value="$(arg dock_yaw)" />
+    <rosparam command="load" file="$(arg locations_file)" />
+    <param name="package" value="$(arg package)" />
+    <param name="station" value="$(arg station)" />
     <param name="rack_standoff" value="$(arg rack_standoff)" />
-    <param name="station_x" value="$(arg station_x)" />
-    <param name="station_y" value="$(arg station_y)" />
-    <param name="station_yaw" value="$(arg station_yaw)" />
   </node>
 </launch>

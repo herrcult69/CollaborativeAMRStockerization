@@ -3,29 +3,29 @@
 Test Pallet Staging & Reverse Docking Maneuver:
   1. Navigate to pre-dock staging pose in front of pallet pocket
   2. Lower lift mast to entry height (-0.02m) so forks enter 60mm cavity cleanly
-  3. Reverse straight back into pallet cavity accounting for 0.22m fork_offset from drive_center
+  3. Reverse straight back until drive_center is pallet_dock_offset (0.342m) in front of the pallet centre
   4. Elevate lift mast to safe under-rack height (+0.015m) to clear floor without hitting overhead beam
   5. Pull straight forward (undock) to extract the pallet out into the aisle and raise mast to 0.15m
+
+The package is a named entry of config/locations_*.yaml (pallet centre). Runs on /odom only (odom = map).
 """
 import math
 import rospy
 from amr_navigation.move_to_point import MoveToPointController
 from amr_navigation.docking import PalletDockingController, compute_dock_target_pose
 from amr_navigation.lift import LiftController
+from amr_navigation.locations import FLOOR_MAX_HEIGHT, find_location
 
 
 def run_dock_test():
     rospy.init_node("test_dock_reverse")
 
-    # Physical kinematics: distance from drive_center (tracked by /odom) to pallet reference
-    # 0.35m = center of tines (~50% penetration halfway into pallet)
-    # 0.22m = deep penetration (~85-90% of tine length into pallet pocket)
-    fork_offset = float(rospy.get_param("~fork_offset", 0.22))  # meters
+    # drive_center (tracked by /odom) stops this far in front of the pallet centre when docked
+    pallet_dock_offset = float(rospy.get_param("~pallet_dock_offset", 0.342))  # forks ~85-90% into the pocket
 
-    # Target Pallet Pose (default: 4.0, 5.0; configurable via ROS params)
-    pallet_x = float(rospy.get_param("~pallet_x", 4.0))
-    pallet_y = float(rospy.get_param("~pallet_y", 5.0))
-    dock_yaw = float(rospy.get_param("~dock_yaw", 270.0))  # degrees
+    # Named pallet centre from config/locations_*.yaml (loaded into ~packages by the launch file)
+    package = str(rospy.get_param("~package", "package_5"))
+    pallet_x, pallet_y, dock_yaw, pallet_h = find_location(rospy.get_param("~packages", {}), package)
     dock_speed = float(rospy.get_param("~dock_speed", 0.12))
     transit_speed = float(rospy.get_param("~transit_speed", 0.45))
     lift_speed = float(rospy.get_param("~lift_speed", 0.08))
@@ -56,12 +56,18 @@ def run_dock_test():
     entry_lift_height = float(rospy.get_param("~entry_lift_height", default_entry))
     pick_lift_height = float(rospy.get_param("~pick_lift_height", default_pick))
 
+    # The bottom lift profile only fits floor pallets
+    if pick_level not in ("top", "upper", "2", "shelf", "3") and pallet_h > FLOOR_MAX_HEIGHT:
+        rospy.logerr("%s sits on an upper rack level (%.2f m); pick_level bottom picks floor pallets only.",
+                     package, pallet_h)
+        return
+
     # Calculate required drive_center stopping pose so forks insert cleanly into pallet
     target_drive_x, target_drive_y = compute_dock_target_pose(
         pallet_x=pallet_x,
         pallet_y=pallet_y,
         dock_yaw_deg=dock_yaw,
-        fork_offset=fork_offset
+        dock_offset=pallet_dock_offset
     )
 
     # Pre-dock staging waypoint: standoff distance in front along heading (or custom param)
@@ -82,10 +88,10 @@ def run_dock_test():
 
     rospy.loginfo("==================================================")
     rospy.loginfo("STARTING PALLET STAGING & REVERSE DOCKING TEST")
-    rospy.loginfo("Target Pallet Cavity        : (%.2f, %.2f) | Dock Yaw: %.1f deg", pallet_x, pallet_y, dock_yaw)
+    rospy.loginfo("Target Pallet Centre        : %s (%.2f, %.2f) | Dock Yaw: %.1f deg", package, pallet_x, pallet_y, dock_yaw)
     rospy.loginfo("Pickup Level Profile        : %s (Entry=%.3fm, Pick=%.3fm)", pick_level, entry_lift_height, pick_lift_height)
     rospy.loginfo("Pre-Dock Staging Pose       : (%.2f, %.2f)", stage_x, stage_y)
-    rospy.loginfo("Fork Arm Lever Offset       : %.2fm (rearward from drive_center)", fork_offset)
+    rospy.loginfo("Pallet Dock Offset          : %.3fm (drive_center in front of the pallet centre)", pallet_dock_offset)
     rospy.loginfo("Calculated drive_center Stop: (%.2f, %.2f)", target_drive_x, target_drive_y)
     rospy.loginfo("==================================================")
 

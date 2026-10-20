@@ -3,30 +3,34 @@
 Test Staging Station Reverse Docking & Undock Extraction:
   1. Navigate directly to Staging Station Pre-Dock Staging Pose (~12.10m, 0.0) facing 180 deg
   2. Elevate lift mast to safe transit height (0.28m) to clear the 25cm (0.25m) staging station
-  3. Precision reverse docking over the 25cm tall staging station (stop at 13.12 - fork_offset = 12.90m)
+  3. Precision reverse docking over the 25cm tall staging station (stop at 13.44 - station_dock_offset = 12.90m)
   4. Lower mast to deposit height (0.21m):
      - At 0.24m: Pallet touches down on the 0.25m station deck
      - At 0.21m: Forks lower inside pocket cavity (10mm clearance above deck, 30mm below ceiling)
   5. Undock extraction: Pull straight forward from 12.90m back to staging standoff (~12.10m) (locked yaw 180 deg)
   6. Lower mast to idle/travel height (0.00m) - Mission Complete!
+
+The station is a named entry of config/locations_*.yaml (Workbench centre). Runs on /odom only (odom = map).
 """
 import math
 import rospy
 from amr_navigation.move_to_point import MoveToPointController
 from amr_navigation.docking import PalletDockingController, compute_dock_target_pose
 from amr_navigation.lift import LiftController
+from amr_navigation.locations import find_location
 
 
 def run_undock_reverse_test():
     rospy.init_node("test_undock_reverse")
 
-    # Physical kinematics: distance from drive_center (tracked by /odom) to fork reference
-    fork_offset = float(rospy.get_param("~fork_offset", 0.22))  # deep tine penetration (85-90%)
+    # drive_center (tracked by /odom) stops this far in front of the station centre when docked
+    station_dock_offset = float(rospy.get_param("~station_dock_offset", 0.54))  # pallet centred over the deck
+    # Touching the station this close to the stop counts as docked (stall guard in dock_reverse)
+    station_contact_tol = float(rospy.get_param("~station_contact_tol", 0.10))
 
-    # Staging Station / Stocker Target (Located at X=13.12, Y=0.0, 25cm tall)
-    station_x = float(rospy.get_param("~station_x", 13.12))
-    station_y = float(rospy.get_param("~station_y", 0.0))
-    station_yaw = float(rospy.get_param("~station_yaw", 180.0))  # Facing West, rear pointing East into dock
+    # Named station centre from config/locations_*.yaml (loaded into ~stations by the launch file)
+    station = str(rospy.get_param("~station", "station_2"))
+    station_x, station_y, station_yaw, _ = find_location(rospy.get_param("~stations", {}), station)
     standoff = float(rospy.get_param("~standoff", 0.8))  # Standoff in front of drive_stop pose
 
     # Kinematic Speeds
@@ -40,13 +44,13 @@ def run_undock_reverse_test():
     TRANSIT_LIFT_HEIGHT = float(rospy.get_param("~transit_lift_height", 0.28))
     DEPOSIT_LIFT_HEIGHT = float(rospy.get_param("~deposit_lift_height", 0.21))
 
-    # Calculate Staging Station Deposit Poses (dock target at 13.12, 0.0):
-    # Stop pose: drive_center stops at station_x + fork_offset * cos(yaw) = 13.12 - 0.22 = 12.90m
+    # Calculate Staging Station Deposit Poses:
+    # Stop pose: drive_center stops at station_x + station_dock_offset * cos(yaw) = 13.44 - 0.54 = 12.90m
     target_deposit_x, target_deposit_y = compute_dock_target_pose(
         pallet_x=station_x,
         pallet_y=station_y,
         dock_yaw_deg=station_yaw,
-        fork_offset=fork_offset
+        dock_offset=station_dock_offset
     )
 
     # Pre-dock staging pose: standoff distance in front of stop pose along heading
@@ -71,10 +75,11 @@ def run_undock_reverse_test():
 
     rospy.loginfo("==================================================")
     rospy.loginfo("STARTING STAGING STATION REVERSE DOCK & UNDOCK TEST")
-    rospy.loginfo("Staging Station Target   : (%.2f, %.2f) [25cm Tall Dock]", station_x, station_y)
+    rospy.loginfo("Staging Station Target   : %s (%.2f, %.2f) [25cm Tall Dock]", station, station_x, station_y)
     rospy.loginfo("Station Stop Pose (Drive): (%.2f, %.2f)", target_deposit_x, target_deposit_y)
     rospy.loginfo("Pre-Dock Staging Pose    : (%.2f, %.2f) | Yaw: %.1f deg", stage_station_x, stage_station_y, station_yaw)
-    rospy.loginfo("Standoff Distance        : %.2fm (Clearance to station: ~%.2fm)", standoff, station_x - stage_station_x)
+    rospy.loginfo("Standoff Distance        : %.2fm (staging pose %.2fm from the station centre)", standoff,
+                  math.hypot(station_x - stage_station_x, station_y - stage_station_y))
     rospy.loginfo("Lift Profiles            : Transit=%.3fm | Deposit=%.3fm", TRANSIT_LIFT_HEIGHT, DEPOSIT_LIFT_HEIGHT)
     rospy.loginfo("==================================================")
 
@@ -106,6 +111,7 @@ def run_undock_reverse_test():
         dock_yaw=station_yaw,
         speed=dock_speed,
         pos_tolerance=0.04,
+        contact_tol=station_contact_tol,
         label="Station Reverse Docking"
     )
     if not ok or rospy.is_shutdown():
@@ -146,7 +152,7 @@ def run_undock_reverse_test():
 
     rospy.loginfo("\n==================================================")
     rospy.loginfo("SUCCESS: STATION REVERSE DOCK & UNDOCK COMPLETE!")
-    rospy.loginfo("AMR completed reverse docking and extraction at station (%.2f, %.2f).", station_x, station_y)
+    rospy.loginfo("AMR completed reverse docking and extraction at %s (%.2f, %.2f).", station, station_x, station_y)
     rospy.loginfo("AMR retreated to aisle at (%.2f, %.2f) with forks clear.", retreat_x, stage_station_y)
     rospy.loginfo("==================================================")
 
