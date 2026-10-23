@@ -242,3 +242,4 @@ Common detection rejects: `only N points ...` (load missing, or the laser isn't 
 - **Map near the station:** `milestone_3_02` draws the bench front about 16 cm closer than Unity does (x ≈ 13). The
   cause is unresolved; it doesn't affect the dock offsets, which were measured on ground-truth odom.
 - **Floor level only:** upper pallets are above the laser plane, and the bottom lift profile can't reach them.
+- **Cargo-dependent detection (Empty Bays):** The current scan plane ($Z \approx 0.22\text{ m}$) tracks the blue cargo box face. If a bay is empty, detection fails. See [RACK_LEG_DOCKING_PROPOSAL.md](RACK_LEG_DOCKING_PROPOSAL.md) for the technical analysis and migration plan to Rack Leg Pair Detection ($Z \approx 0.08\text{ m}$).

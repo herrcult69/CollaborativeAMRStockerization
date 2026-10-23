@@ -144,27 +144,43 @@ def run_mission():
     transit_speed = float(rospy.get_param("~transit_speed", 0.45))
     lift_speed = float(rospy.get_param("~lift_speed", 0.08))
 
-    # Same lift profiles as Milestone 1
-    pick_level = str(rospy.get_param("~pick_level", "bottom")).strip().lower()
-    if pick_level in ("top", "upper", "2"):
-        default_entry, default_pick, default_transit = 0.240, 0.290, 0.290
+    # Dynamic lift profiles matching measured rack heights (supports auto detection from pallet_h)
+    pick_level = str(rospy.get_param("~pick_level", "auto")).strip().lower()
+    if pick_level in ("top_shelf", "shelf_top", "4"):
+        default_entry, default_pick, default_transit = 1.005, 1.025, 0.280
     elif pick_level in ("shelf", "3"):
-        default_entry, default_pick, default_transit = 0.640, 0.685, 0.280
-    else:
-        default_entry, default_pick, default_transit = -0.020, 0.010, 0.280
+        default_entry, default_pick, default_transit = (0.740, 0.765, 0.280) if pallet_h > 0.70 else (0.640, 0.685, 0.280)
+    elif pick_level in ("top", "upper", "stack", "2"):
+        default_entry, default_pick, default_transit = (0.335, 0.355, 0.280) if pallet_h > 0.32 else (0.240, 0.290, 0.290)
+    elif pick_level in ("bottom", "floor", "1"):
+        default_entry, default_pick, default_transit = (0.070, 0.090, 0.280) if pallet_h > 0.08 else (-0.020, 0.010, 0.280)
+    else:  # "auto" or unrecognized: select dynamically from YAML pallet_h!
+        if pallet_h > 0.90:
+            default_entry, default_pick, default_transit = 1.005, 1.025, 0.280
+            pick_level = "top_shelf (auto)"
+        elif pallet_h > 0.60:
+            default_entry, default_pick, default_transit = (0.740, 0.765, 0.280) if pallet_h > 0.70 else (0.640, 0.685, 0.280)
+            pick_level = "shelf (auto)"
+        elif pallet_h > 0.20:
+            default_entry, default_pick, default_transit = (0.335, 0.355, 0.280) if pallet_h > 0.32 else (0.240, 0.290, 0.290)
+            pick_level = "stack (auto)"
+        else:
+            default_entry, default_pick, default_transit = (0.070, 0.090, 0.280) if pallet_h > 0.08 else (-0.020, 0.010, 0.280)
+            pick_level = "bottom (auto)"
 
     ENTRY_LIFT_HEIGHT = float(rospy.get_param("~entry_lift_height", default_entry))
     PICK_LIFT_HEIGHT = float(rospy.get_param("~pick_lift_height", default_pick))
     raw_transit = rospy.get_param("~transit_lift_height", None)
-    if raw_transit is None or (float(raw_transit) == 0.28 and pick_level in ("top", "upper", "2")):
+    if raw_transit is None or (float(raw_transit) == 0.28 and "top" in pick_level):
         TRANSIT_LIFT_HEIGHT = default_transit
     else:
         TRANSIT_LIFT_HEIGHT = float(raw_transit)
     DEPOSIT_LIFT_HEIGHT = float(rospy.get_param("~deposit_lift_height", 0.21))
 
-    # The bottom lift profile and the laser detection (0.13 m scan plane) only fit floor pallets
-    if not skip_pickup and pick_level not in ("top", "upper", "2", "shelf", "3") and pallet_h > FLOOR_MAX_HEIGHT:
-        rospy.logerr("%s sits on an upper rack level (%.2f m); pick_level bottom picks floor pallets only.",
+    # Safety check: bottom lift profile without auto-detect only fits ground pallets
+    valid_upper_levels = ("top", "upper", "stack", "2", "shelf", "3", "top_shelf", "shelf_top", "4")
+    if not skip_pickup and not any(k in pick_level for k in valid_upper_levels) and not pick_level.endswith("(auto)") and pallet_h > FLOOR_MAX_HEIGHT:
+        rospy.logerr("%s sits on an upper rack level (%.2f m); specify pick_level or use pick_level:=auto.",
                      package, pallet_h)
         return
 

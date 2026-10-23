@@ -7,8 +7,8 @@ reversing in). Mission scripts turn the centre into a drive_center stop with com
 pallet_dock_offset / station_dock_offset.
 """
 
-# Floor pallets sit at 0.03 m in Milestone_3; the next rack level starts at 0.29 m
-FLOOR_MAX_HEIGHT = 0.10
+# Floor/bottom pallets sit at 0.03 m (legacy) or 0.11-0.12 m on Rack-DetectReady; the next rack level starts at ~0.37 m
+FLOOR_MAX_HEIGHT = 0.18
 
 
 def find_location(table, name):

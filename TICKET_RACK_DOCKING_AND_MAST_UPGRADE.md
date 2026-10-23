@@ -1,0 +1,103 @@
+# [TICKET] Rack Docking Architecture & AMR Mast Extension for Tier-4 Pallets
+
+> [!IMPORTANT]
+> **DIRECTIVE FOR THE CODING AGENT PROCESSING THIS TICKET:**  
+> When you (the agent) receive this ticket, you **MUST immediately ask your user** to make decisions on the following two prerequisites before executing any code changes:
+> 1. **Warehouse Remapping (`Assets/Scenes/NewMap_noObs.unity`):**  
+>    *Ask the user:* "The scene `Assets/Scenes/NewMap_noObs.unity` removes the static clutter obstacles. Do you want to run `warehouse_mapping.launch` now to record and generate a clean new `.yaml` / `.pgm` costmap without static obstacles?"
+> 2. **LiDAR Ray Count Configuration (361 vs 181 rays):**  
+>    *Ask the user:* "Do you want to run the 2D LiDAR with **361 rays** (0.5° resolution, higher density for the 8 mm precision entry gate) or stay at **181 rays** (1.0° resolution)? If 361 is selected, verify that `PlanarLaserScanPublisher` in Unity Inspector has `Ray Count = 361`."
+
+**Status:** Open / Proposed  
+**Priority:** High (Blocks Top-Shelf Picking & Empty-Bay Docking)  
+**Assigned To:** Engineering Team  
+**Authoritative Documentation References:**  
+- 📖 [`docs/WAREHOUSE_METRICS_AND_CLEARANCE.md`](docs/WAREHOUSE_METRICS_AND_CLEARANCE.md) — Comprehensive metric clearances, 4-tier heights, and lift kinematics.
+- 📖 [`docs/RACK_LEG_DOCKING_PROPOSAL.md`](docs/RACK_LEG_DOCKING_PROPOSAL.md) — Mathematical formulation and algorithm design for Rack Leg Pair detection.
+- 📖 [`docs/pallet_detection.md`](docs/pallet_detection.md) — Milestone 2 mission architecture, snapshot math, and 20 Hz line-following controller.
+
+---
+
+## 1. Summary of Changes & Problem Statement
+
+Following the recent map and rack updates in `amr_ware_house`:
+1. Two new rack prefabs were introduced:
+   - **`Rack-DetectReady1`**: features small indicator lips/shields on the front beam.
+   - **`Rack-DetectReady2`**: features 5 structural floor legs forming 4 distinct bay openings.
+2. Pallet elevations now span **4 vertical tiers** ($0.11\text{ m}$, $0.37\text{ m}$, $0.78\text{ m}$, and $1.05\text{ m}$).
+3. **Critical Physical Blocker:** The AMR robot's mast is currently $0.85\text{ m}$ tall and software-limited to $0.75\text{ m}$ lift stroke. It **physically cannot reach the top shelf pallets at $1.05\text{ m}$** (it falls short by $\approx 30\text{ cm}$).
+4. **Detection Limitation:** Our current Milestone 2 laser detection (`detect_load_face`) tracks the front plastic face of the blue cargo box. If a bay is empty (or when docking to deposit a pallet), the laser shoots straight into the back wall and the mission aborts.
+
+---
+
+## 2. Part A: Rack Prefab Evaluation & Detection Architecture
+
+We evaluated both new rack prefabs for laser docking perception:
+
+### Option 1: `Rack-DetectReady1` (Front Lips / Shields) — NOT RECOMMENDED
+* **The "Behind-the-Lip" Trap (Split-Depth Artifact):**  
+  In this prefab, pallets sit directly behind the front shield ($3-5\text{ cm}$ gap). Laser rays that graze past the lip edges strike the pallet face slightly deeper:
+  $$d_{\text{lip}} = 1.10\text{ m} \quad \text{vs} \quad d_{\text{pallet}} = 1.14\text{ m}$$
+  Because 2D LiDAR has beam divergence and angular resolution steps, this produces a **staircase/dual-plane point cloud**. A standard PCA line fit across these points tilts diagonally and exceeds the straightness limit ($\text{RMS} > 3\text{ cm}$ vs threshold $1\text{ cm}$), causing scans to be falsely rejected.
+* **Mechanical Snag Risk:** Any front lip tall enough to reliably bounce 2D laser beams risks catching the bottom of the fork carriage during ground-level insertion ($Z \approx 20\text{ mm}$).
+
+### Option 2: `Rack-DetectReady2` (Bottom Legs / Pillar Pair) — RECOMMENDED
+* **Clean Laser Signature:**  
+  The 5 bottom legs are spaced across the $1.80\text{ m}$ rack at **$0.420\text{ m}$ pitch**.  
+  Each bay is flanked by two $0.08\text{ m}$ wide steel legs, leaving a **$0.340\text{ m}$ completely unobstructed corridor** for the forks.
+* **Invariant to Bay Contents:**  
+  The laser detects the **two vertical steel pillars** of the bay. The signature is 100% identical whether the bay is full, holds an empty pallet, or is completely empty. This allows micro-perception docking for both **pick** and **deposit** missions.
+
+---
+
+## 3. Part B: AMR Mast & Lift Height Extension (Physical Upgrade)
+
+### The Math:
+From `Rack-DetectReady1` and `Rack-DetectReady2`, the 4 storage tier elevations are:
+- **Tier 1 (Lower Bay, Bottom Pallet):** $Y_{\text{base}} \approx 0.110\text{ m}$ $\rightarrow$ Pick stroke: $q = +0.090\text{ m}$
+- **Tier 2 (Lower Bay, Stacked Pallet):** $Y_{\text{base}} \approx 0.373\text{ m}$ $\rightarrow$ Pick stroke: $q = +0.353\text{ m}$
+- **Tier 3 (Upper Shelf, Lower Pallet):** $Y_{\text{base}} \approx 0.781\text{ m}$ $\rightarrow$ Pick stroke: $q = +0.761\text{ m}$ (exceeds current $0.75\text{ m}$ limit!)
+- **Tier 4 (Upper Shelf, Top Pallet):** $Y_{\text{base}} \approx 1.044\text{ m}$ $\rightarrow$ Pick stroke: $q = \mathbf{+1.024\text{ m}}$ (**FAIL: Current max is $+0.750\text{ m}$**)
+
+### Applied Tuned Values:
+- **`xstack_amr.urdf`**: `mast_link` box height set to **`0.90m`** (`origin xyz="0 0 0.45"`), `lift_joint` upper limit set to **`0.80m`**.
+- **`StackerController.cs`**: `maxLiftHeight = 0.80f;`
+- **`xstack_amr.prefab`**: visual/collision scale Y set to **`0.90m`** (`pos Y = 0.45m`), ArticulationBody upperLimit set to **`0.80m`**.
+
+*Result:* Tiers 1, 2, and 3 ($q_{\text{pick}} \le 0.761\text{ m}$) are **100% supported** without making the single-stage mast awkwardly tall. Tier 4 ($1.05\text{ m}$) is recognized as an optional future reach target (which would require a 2-stage telescopic mast).
+
+---
+
+## 4. Part C: Dynamic Location Export Workflow (`RosLocationExport.cs`)
+
+Because pallet elevations shift with different rack models, coordinates must not be hardcoded in mission scripts.
+
+The newly created `Assets/Editor/RosLocationExport.cs` solves this cleanly:
+1. When scene modifications are complete, select **Tools → Export ROS Locations** in the Unity Editor toolbar (with Play mode **stopped**).
+2. The script queries every `StandardPallet` in the scene, computes its `/odom` coordinates and exact base height $Y$, and exports them to:
+   `catkin_ws/src/amr_navigation/config/locations_milestone_3.yaml`
+3. Missions can then pick any pallet by semantic name:
+   ```bash
+   roslaunch amr_navigation milestone2.launch package:=package_42 station:=station_1
+   ```
+4. The mission script automatically selects the appropriate lift profile (`bottom`, `stack`, `shelf`, `top_shelf`) based on the exported `height`.
+
+---
+
+## 5. Implementation Action Items & Checklist
+
+- [ ] **Action 0: Interactive User Alignment (Agent Prompting)**
+  - [ ] Prompt user: Remap warehouse from `Assets/Scenes/NewMap_noObs.unity` (without static obstacles).
+  - [ ] Prompt user: Confirm 361 LiDAR rays (0.5° resolution) vs 181 rays in Unity Inspector.
+- [ ] **Action 1: Unity Robot Mast & Joint Extension**
+  - [ ] Update `Assets/StackerController.cs` line 21: `maxLiftHeight = 1.15f;`.
+  - [ ] Update `xstack_amr.prefab` mast mesh and ArticulationBody limits.
+  - [ ] Verify manual lift test (pressing `R` in Unity editor reaches above the top shelf deck).
+- [ ] **Action 2: URDF Synchronization**
+  - [ ] Update `xstack_amr.urdf` mast box height ($1.25\text{ m}$) and prismatic limit ($1.15\text{ m}$).
+- [ ] **Action 3: Adopt `Rack-DetectReady2` as Primary Rack Prefab**
+  - [ ] Standardize scene layout on `Rack-DetectReady2` (with the 5 floor legs).
+  - [ ] Re-run **Tools → Export ROS Locations** to generate the updated `locations_milestone_3.yaml`.
+- [ ] **Action 4: Implement Rack Leg Pair Detection Algorithm**
+  - [ ] Add `detect_rack_legs()` in `pallet_detect.py` to cluster the two leg posts at $0.42\text{ m}$ span.
+  - [ ] Add automated unit tests in `test_pallet_detect.py` verifying leg detection on empty and loaded bays.
