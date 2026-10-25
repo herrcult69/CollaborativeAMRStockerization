@@ -1,0 +1,23 @@
+# teb_warehouse.yaml (starting point)
+max_vel_x: 0.25
+max_vel_x_backwards: 0.05      # must be > 0; discourage reversing since the lidar faces forward
+max_vel_theta: 0.45
+acc_lim_x: 0.5
+acc_lim_theta: 1.0
+
+xy_goal_tolerance: 0.30
+yaw_goal_tolerance: 0.30
+free_goal_vel: false
+
+footprint_model:
+  type: "polygon"
+  vertices: [[0.37, 0.23], [-0.54, 0.23], [-0.54, -0.23], [0.37, -0.23]]
+min_obstacle_dist: 0.35
+inflation_dist: 0.6
+include_costmap_obstacles: true
+include_dynamic_obstacles: true
+weight_dynamic_obstacle: 10
+weight_kinematics_forward_drive: 100   # strongly prefer driving forward
+costmap_converter_plugin: "costmap_converter::CostmapToDynamicObstacles"
+costmap_converter_spin_thread: true
+costmap_converter_rate: 5
