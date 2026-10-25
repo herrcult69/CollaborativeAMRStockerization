@@ -1,7 +1,7 @@
 # Shared costmap settings. Load robot_<profile>.yaml afterward.
 transform_tolerance: 0.3
 resolution: 0.05
-always_send_full_costmap: true
+always_send_full_costmap: false
 
 static_layer:
 # Copy the walls/ racks from the saved /map
@@ -29,5 +29,5 @@ obstacle_layer:
 
 inflation_layer: # Make the area surrounding the obstacles BIGGER 
 # Affect the Costplan => make the robot prefer the middle path instead of near the racks
-  inflation_radius: 0.65
+  inflation_radius: 0.5
   cost_scaling_factor: 3.0
