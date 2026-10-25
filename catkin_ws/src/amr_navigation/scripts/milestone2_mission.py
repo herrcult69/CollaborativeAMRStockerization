@@ -20,8 +20,7 @@ from amr_navigation.docking import PalletDockingController, compute_dock_target_
 from amr_navigation.lift import LiftController
 
 
-def move_base_to(client, nav, x, y, yaw_deg, timeout, label):
-    """Send one map-frame goal and block until move_base finishes. Stops the robot on any failure."""
+def move_base_to(client, nav, x, y, yaw_deg, timeout, label, accept_radius=0.5):
     goal = MoveBaseGoal()
     goal.target_pose.header.frame_id = "map"
     goal.target_pose.header.stamp = rospy.Time.now()
@@ -30,18 +29,40 @@ def move_base_to(client, nav, x, y, yaw_deg, timeout, label):
     goal.target_pose.pose.orientation.z = math.sin(math.radians(yaw_deg) / 2.0)
     goal.target_pose.pose.orientation.w = math.cos(math.radians(yaw_deg) / 2.0)
 
+    last = {"d": float("inf")}
+
+    def feedback(fb):
+        p = fb.base_position.pose.position
+        last["d"] = math.hypot(x - p.x, y - p.y)
+        rospy.loginfo_throttle(2.0, "[%s] goal dist %.2f", label, last["d"])
+
     rospy.loginfo(">>> MOVE_BASE GOAL: %s (%.2f, %.2f, %.1f deg)", label, x, y, yaw_deg)
-    client.send_goal(goal)
-    finished = client.wait_for_result(rospy.Duration(timeout))
+    client.send_goal(goal, feedback_cb=feedback)
+
+    deadline = rospy.Time.now() + rospy.Duration(timeout)
+    while not rospy.is_shutdown() and rospy.Time.now() < deadline:
+        if client.wait_for_result(rospy.Duration(0.5)):
+            break
+        # Close enough: hand over to the precision controller
+        if last["d"] <= accept_radius and client.get_state() == GoalStatus.ACTIVE:
+            rospy.logwarn(">>> %s: within %.2fm, handing over early", label, last["d"])
+            client.cancel_goal()
+            client.wait_for_result(rospy.Duration(2.0))
+            nav.stop()
+            return True
+
     state = client.get_state()
-    if finished and state == GoalStatus.SUCCEEDED:
-        rospy.loginfo(">>> MOVE_BASE REACHED: %s", label)
+    if state == GoalStatus.SUCCEEDED:
+        return True
+    if last["d"] <= accept_radius:       # aborted by oscillation near the goal
+        nav.stop()
+        rospy.logwarn(">>> %s: aborted at %.2fm, accepting for handover", label, last["d"])
         return True
 
     client.cancel_goal()
     nav.stop()
-    rospy.logerr(">>> MOVE_BASE FAILED: %s (%s, state=%d)", label,
-                 "finished" if finished else "timeout %.0fs" % timeout, state)
+    rospy.logerr(">>> MOVE_BASE FAILED: %s (state=%s)", label,
+                 actionlib.get_name_of_constant(GoalStatus, state))
     return False
 
 
