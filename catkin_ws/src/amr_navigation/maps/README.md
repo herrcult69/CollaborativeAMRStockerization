@@ -19,3 +19,7 @@ Keep each pair together. These are outputs of a completed mapping run, not the U
 `new_map_noobs_01` was captured with gmapping on 2026-10-26 for the XStack Variant in `NewMapnoObs`
 (no static clutter, 8 `Rack-DetectReady2` racks, lidar 361 rays at ~0.04 m). At that height racks show
 as rows of floor-runner posts. Matches `config/locations_milestone_3.yaml` exported from the same scene.
+
+`new_map_noobs_02` (2026-10-26) replaces `_01` as the xstack default after the `NewMapnoObs` layout changed
+(racks removed from the top-right and bottom rows, small floor obstacles added). The station room is fully
+explored this time. Pair it with a `locations_milestone_3.yaml` exported from the same saved layout.
