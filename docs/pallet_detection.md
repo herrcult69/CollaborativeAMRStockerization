@@ -81,7 +81,7 @@ Example, `package_5`: `5.122 − 0.342 = 4.780`. drive_center stops at (4.003, 4
 2.980  ⊕ pre-stage, move_base goal (stage − approach 0.6)
 ```
 
-A pallet that isn't on the floor (`height` > 0.10 m) is rejected while `pick_level` is `bottom`.
+Lift heights follow the pallet `height`: entry 0.040 m below it (tines mid-pocket), then a 0.050 m pick lift; pallets needing more than the 1.15 m mast stroke are rejected.
 
 ---
 

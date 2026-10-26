@@ -27,7 +27,7 @@
   <param name="/use_sim_time" value="true" />
 
   <arg name="robot_profile" default="xstack" doc="xstack or legacy" />
-  <arg name="map_file" default="$(eval find('amr_navigation') + '/maps/' + {'xstack': 'milestone_3_02', 'legacy': 'warehouse_training_01'}[arg('robot_profile')] + '.yaml')" />
+  <arg name="map_file" default="$(eval find('amr_navigation') + '/maps/' + {'xstack': 'new_map_noobs_01', 'legacy': 'warehouse_training_01'}[arg('robot_profile')] + '.yaml')" />
 
   <!-- Initial pose in milestone_3_02 map (axle ground projection at origin) -->
   <arg name="initial_pose_x" default="0.0" />

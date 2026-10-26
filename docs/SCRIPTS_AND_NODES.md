@@ -409,7 +409,8 @@ STEP 6: Lower mast to 0.00m (idle/travel height)
 
 | Param | Default | Description |
 |---|---|---|
-| `~pick_level` | `bottom` | Target level: `"bottom"` / `"1"`, `"top"` / `"2"`, or `"shelf"` / `"3"` |
+| `~detect_mode` | `rack_legs` | `rack_legs` (lidar under the bottom plank, works on empty bays) or `load_face` (lidar at load-box height) |
+| `~entry_below_base` / `~pick_rise` | `0.040` / `0.050` | Entry lift = pallet `height` − 0.040 m (tines mid-pocket), pick lift = entry + 0.050 m (deck ~30 mm clear) (override with `~entry_lift_height` / `~pick_lift_height`) |
 | `~skip_pickup` | `false` | Skip pickup if pallet already loaded on forks |
 | `~package` | `package_5` | Pallet to pick, named in `locations_file` (object centre + dock heading) |
 | `~station` | `station_2` | Station to deliver to, named in `locations_file` |

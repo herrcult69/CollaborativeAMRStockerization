@@ -86,18 +86,19 @@ The newly created `Assets/Editor/RosLocationExport.cs` solves this cleanly:
 
 ## 5. Implementation Action Items & Checklist
 
-- [ ] **Action 0: Interactive User Alignment (Agent Prompting)**
-  - [ ] Prompt user: Remap warehouse from `Assets/Scenes/NewMap_noObs.unity` (without static obstacles).
-  - [ ] Prompt user: Confirm 361 LiDAR rays (0.5° resolution) vs 181 rays in Unity Inspector.
-- [ ] **Action 1: Unity Robot Mast & Joint Extension**
-  - [ ] Update `Assets/StackerController.cs` line 21: `maxLiftHeight = 1.15f;`.
-  - [ ] Update `xstack_amr.prefab` mast mesh and ArticulationBody limits.
-  - [ ] Verify manual lift test (pressing `R` in Unity editor reaches above the top shelf deck).
-- [ ] **Action 2: URDF Synchronization**
-  - [ ] Update `xstack_amr.urdf` mast box height ($1.25\text{ m}$) and prismatic limit ($1.15\text{ m}$).
-- [ ] **Action 3: Adopt `Rack-DetectReady2` as Primary Rack Prefab**
-  - [ ] Standardize scene layout on `Rack-DetectReady2` (with the 5 floor legs).
-  - [ ] Re-run **Tools → Export ROS Locations** to generate the updated `locations_milestone_3.yaml`.
-- [ ] **Action 4: Implement Rack Leg Pair Detection Algorithm**
-  - [ ] Add `detect_rack_legs()` in `pallet_detect.py` to cluster the two leg posts at $0.42\text{ m}$ span.
-  - [ ] Add automated unit tests in `test_pallet_detect.py` verifying leg detection on empty and loaded bays.
+- [x] **Action 0: Interactive User Alignment (Agent Prompting)**
+  - [x] Prompt user: Remap warehouse from `Assets/Scenes/NewMap_noObs.unity` (without static obstacles).
+  - [x] Prompt user: Confirm 361 LiDAR rays (0.5° resolution) vs 181 rays in Unity Inspector.
+  - [x] Remap warehouse from `NewMapnoObs.unity` → `maps/new_map_noobs_01.yaml/.pgm` (now the xstack default map).
+- [x] **Action 1: Unity Robot Mast & Joint Extension**
+  - [x] Update `Assets/StackerController.cs` line 21: `maxLiftHeight = 1.15f;`.
+  - [x] Update `xstack_amr.prefab` mast mesh and ArticulationBody limits.
+  - [x] Verify manual lift test (pressing `R` in Unity editor reaches above the top shelf deck).
+- [x] **Action 2: URDF Synchronization**
+  - [x] Update `xstack_amr.urdf` mast box height ($1.25\text{ m}$) and prismatic limit ($1.15\text{ m}$).
+- [x] **Action 3: Adopt `Rack-DetectReady2` as Primary Rack Prefab**
+  - [x] Standardize scene layout on `Rack-DetectReady2` (with the 5 floor legs).
+  - [x] Re-run **Tools → Export ROS Locations** to generate the updated `locations_milestone_3.yaml`.
+- [x] **Action 4: Implement Rack Leg Pair Detection Algorithm**
+  - [x] Add `detect_rack_legs()` in `pallet_detect.py` to cluster the two leg posts at $0.42\text{ m}$ span.
+  - [x] Add automated unit tests in `test_pallet_detect.py` verifying leg detection on empty and loaded bays.

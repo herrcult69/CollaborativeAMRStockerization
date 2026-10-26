@@ -25,8 +25,11 @@ from amr_navigation.move_to_point import MoveToPointController
 from amr_navigation.docking import (PalletDockingController, compute_dock_target_pose, compute_prestage_pose,
                                     map_pose_to_odom)
 from amr_navigation.lift import LiftController
-from amr_navigation.locations import FLOOR_MAX_HEIGHT, find_location
-from amr_navigation.pallet_detect import detect_load_face, scan_to_points
+from amr_navigation.locations import find_location, pick_unit
+from amr_navigation.pallet_detect import detect_load_face, detect_rack_legs, scan_to_points
+
+LIFT_MIN, LIFT_MAX = -0.02, 1.15  # lift_joint limits (xstack_amr.urdf / StackerController.maxLiftHeight)
+INVENTORY_PARAM = "/warehouse_inventory/empty"  # names of picked packages, i.e. empty slots
 
 TF_ERRORS = (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException)
 
@@ -50,9 +53,9 @@ def snapshot_map_to_odom(tf_buffer, nav, settle, label):
     return dx, dy, dth
 
 
-def detect_pallet(tf_buffer, expected, width, face_offset, scans=5):
+def detect_pallet(tf_buffer, expected, detect, scans=5):
     """
-    Measure the pallet from its load face in odom over several scans (robot standing still, facing it).
+    Measure the pallet with detect(points, x, y, dock_yaw_deg) -> (pose, why) in odom over several scans (robot standing still, facing it).
     Returns (x, y, dock_yaw_deg) in odom, or None after logging why.
     """
     rospy.sleep(0.5)
@@ -66,13 +69,13 @@ def detect_pallet(tf_buffer, expected, width, face_offset, scans=5):
             continue
         pts = scan_to_points(scan.ranges, scan.angle_min, scan.angle_increment, scan.range_min, scan.range_max,
                              t.transform.translation.x, t.transform.translation.y, quat_yaw(t.transform.rotation))
-        pose, why = detect_load_face(pts, expected[0], expected[1], expected[2], width=width, face_offset=face_offset)
+        pose, why = detect(pts, expected[0], expected[1], expected[2])
         if pose is None:
             rospy.logwarn("[Detect] scan rejected: %s", why)
         else:
             found.append(pose)
     if len(found) < 3:
-        rospy.logerr(">>> PALLET DETECTION FAILED: %d/%d scans found the load face.", len(found), scans)
+        rospy.logerr(">>> PALLET DETECTION FAILED: %d/%d scans found the pallet.", len(found), scans)
         return None
     n = float(len(found))
     mx, my = sum(p[0] for p in found) / n, sum(p[1] for p in found) / n
@@ -125,7 +128,17 @@ def run_mission():
     # Named object centres from config/locations_*.yaml (loaded into ~packages / ~stations by the launch file)
     package = str(rospy.get_param("~package", "package_5"))
     station = str(rospy.get_param("~station", "station_2"))
-    pallet_x, pallet_y, dock_yaw, pallet_h = find_location(rospy.get_param("~packages", {}), package)
+    packages = rospy.get_param("~packages", {})
+    pallet_x, pallet_y, dock_yaw, pallet_h = find_location(packages, package)
+    # Slots emptied by earlier missions, kept on the master across runs; reset after restarting Unity Play
+    if rospy.get_param("~reset_inventory", False):
+        rospy.set_param(INVENTORY_PARAM, [])
+    empty = list(rospy.get_param(INVENTORY_PARAM, []))
+    if not skip_pickup and package in empty:
+        rospy.logerr("%s's slot is empty (picked earlier, alone or under its stack). Empty: %s",
+                     package, ", ".join(empty))
+        return
+    unit = pick_unit(packages, package, empty)
     station_x, station_y, station_yaw, _ = find_location(rospy.get_param("~stations", {}), station)
     # drive_center stops this far in front of the object centre when docked (see compute_dock_target_pose)
     pallet_dock_offset = float(rospy.get_param("~pallet_dock_offset", 0.342))
@@ -144,44 +157,18 @@ def run_mission():
     transit_speed = float(rospy.get_param("~transit_speed", 0.45))
     lift_speed = float(rospy.get_param("~lift_speed", 0.08))
 
-    # Dynamic lift profiles matching measured rack heights (supports auto detection from pallet_h)
-    pick_level = str(rospy.get_param("~pick_level", "auto")).strip().lower()
-    if pick_level in ("top_shelf", "shelf_top", "4"):
-        default_entry, default_pick, default_transit = 1.005, 1.025, 0.280
-    elif pick_level in ("shelf", "3"):
-        default_entry, default_pick, default_transit = (0.740, 0.765, 0.280) if pallet_h > 0.70 else (0.640, 0.685, 0.280)
-    elif pick_level in ("top", "upper", "stack", "2"):
-        default_entry, default_pick, default_transit = (0.335, 0.355, 0.280) if pallet_h > 0.32 else (0.240, 0.290, 0.290)
-    elif pick_level in ("bottom", "floor", "1"):
-        default_entry, default_pick, default_transit = (0.070, 0.090, 0.280) if pallet_h > 0.08 else (-0.020, 0.010, 0.280)
-    else:  # "auto" or unrecognized: select dynamically from YAML pallet_h!
-        if pallet_h > 0.90:
-            default_entry, default_pick, default_transit = 1.005, 1.025, 0.280
-            pick_level = "top_shelf (auto)"
-        elif pallet_h > 0.60:
-            default_entry, default_pick, default_transit = (0.740, 0.765, 0.280) if pallet_h > 0.70 else (0.640, 0.685, 0.280)
-            pick_level = "shelf (auto)"
-        elif pallet_h > 0.20:
-            default_entry, default_pick, default_transit = (0.335, 0.355, 0.280) if pallet_h > 0.32 else (0.240, 0.290, 0.290)
-            pick_level = "stack (auto)"
-        else:
-            default_entry, default_pick, default_transit = (0.070, 0.090, 0.280) if pallet_h > 0.08 else (-0.020, 0.010, 0.280)
-            pick_level = "bottom (auto)"
-
-    ENTRY_LIFT_HEIGHT = float(rospy.get_param("~entry_lift_height", default_entry))
-    PICK_LIFT_HEIGHT = float(rospy.get_param("~pick_lift_height", default_pick))
-    raw_transit = rospy.get_param("~transit_lift_height", None)
-    if raw_transit is None or (float(raw_transit) == 0.28 and "top" in pick_level):
-        TRANSIT_LIFT_HEIGHT = default_transit
-    else:
-        TRANSIT_LIFT_HEIGHT = float(raw_transit)
+    # Lift heights follow the exported pallet base height (fork top = lift + ~0.077 m, pallet pocket = base to
+    # base + 0.060 m): tines enter mid-pocket 40 mm below the base command, then rise 50 mm, which lifts the deck
+    # ~30 mm clear of its support. A 20 mm rise only lifted pallets that had dropped onto the rack at Play start.
+    entry_below = float(rospy.get_param("~entry_below_base", 0.040))
+    pick_rise = float(rospy.get_param("~pick_rise", 0.050))
+    ENTRY_LIFT_HEIGHT = float(rospy.get_param("~entry_lift_height", max(LIFT_MIN, pallet_h - entry_below)))
+    PICK_LIFT_HEIGHT = float(rospy.get_param("~pick_lift_height", ENTRY_LIFT_HEIGHT + pick_rise))
+    TRANSIT_LIFT_HEIGHT = float(rospy.get_param("~transit_lift_height", 0.28))
     DEPOSIT_LIFT_HEIGHT = float(rospy.get_param("~deposit_lift_height", 0.21))
-
-    # Safety check: bottom lift profile without auto-detect only fits ground pallets
-    valid_upper_levels = ("top", "upper", "stack", "2", "shelf", "3", "top_shelf", "shelf_top", "4")
-    if not skip_pickup and not any(k in pick_level for k in valid_upper_levels) and not pick_level.endswith("(auto)") and pallet_h > FLOOR_MAX_HEIGHT:
-        rospy.logerr("%s sits on an upper rack level (%.2f m); specify pick_level or use pick_level:=auto.",
-                     package, pallet_h)
+    if not skip_pickup and PICK_LIFT_HEIGHT > LIFT_MAX:
+        rospy.logerr("%s at %.3f m needs a %.3f m pick lift; the mast stops at %.2f m.",
+                     package, pallet_h, PICK_LIFT_HEIGHT, LIFT_MAX)
         return
 
     # Rack poses: dock target -> stage (rack_standoff) -> pre-stage
@@ -207,6 +194,13 @@ def run_mission():
     load_width = float(rospy.get_param("~load_width", 0.35))              # load box front face width (m)
     # Load box front face, measured from the pallet centre toward the aisle (box 0.30 m deep, centred)
     load_face_offset = float(rospy.get_param("~load_face_offset", 0.15))
+    # rack_legs: lidar under the bottom plank sees the bay's floor runners (works on empty bays too);
+    # load_face: lidar at load height sees the box front (pre-Variant robot)
+    detect_mode = str(rospy.get_param("~detect_mode", "rack_legs")).strip().lower()
+    if detect_mode == "load_face":
+        detect = lambda pts, x, y, yaw: detect_load_face(pts, x, y, yaw, width=load_width, face_offset=load_face_offset)
+    else:
+        detect = detect_rack_legs
 
     client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
     rospy.loginfo("Waiting for move_base action server...")
@@ -225,8 +219,10 @@ def run_mission():
     rospy.loginfo("Station pre-stage : (%.2f, %.2f, %.1f) -> stage (%.2f, %.2f, %.1f) -> dock (%.2f, %.2f)",
                   pre_station[0], pre_station[1], pre_station[2], stage_station_x, stage_station_y, station_yaw,
                   target_deposit_x, target_deposit_y)
-    rospy.loginfo("Lift              : Entry=%.3f Pick=%.3f Transit=%.3f Deposit=%.3f [%s]",
-                  ENTRY_LIFT_HEIGHT, PICK_LIFT_HEIGHT, TRANSIT_LIFT_HEIGHT, DEPOSIT_LIFT_HEIGHT, pick_level)
+    rospy.loginfo("Lift              : Entry=%.3f Pick=%.3f Transit=%.3f Deposit=%.3f [pallet base %.3f m]",
+                  ENTRY_LIFT_HEIGHT, PICK_LIFT_HEIGHT, TRANSIT_LIFT_HEIGHT, DEPOSIT_LIFT_HEIGHT, pallet_h)
+    if not skip_pickup:
+        rospy.loginfo("Pick unit         : %s (%d pallet%s)", " + ".join(unit), len(unit), "s" if len(unit) > 1 else "")
     rospy.loginfo("==================================================")
 
     # ---------------------------------------------------------
@@ -253,7 +249,7 @@ def run_mission():
                 rospy.logwarn("Mission aborted at Rack Staging.")
                 return
             pallet_o = map_pose_to_odom(pallet_x, pallet_y, dock_yaw, *T)
-            det = detect_pallet(tf_buffer, pallet_o, load_width, load_face_offset)
+            det = detect_pallet(tf_buffer, pallet_o, detect)
             if det is None:
                 nav.stop()
                 rospy.logerr("Mission aborted: pallet not confirmed by the laser.")
@@ -300,6 +296,10 @@ def run_mission():
         if not ok or rospy.is_shutdown():
             rospy.logwarn("Mission aborted during rack extraction.")
             return
+        # The unit has left the rack: its slots stay empty even if the delivery fails later
+        empty = sorted(set(empty) | set(unit))
+        rospy.set_param(INVENTORY_PARAM, empty)
+        rospy.loginfo(">>> Slots now empty: %s", ", ".join(unit))
     else:
         rospy.loginfo(">>> Skipping Rack Pickup (Pallet assumed already loaded on forks).")
 

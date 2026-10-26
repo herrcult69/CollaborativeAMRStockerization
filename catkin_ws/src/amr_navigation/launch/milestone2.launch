@@ -22,7 +22,6 @@
     Ensure warehouse_autonav.launch (or localization + navigation) is running first!
 
   ARGUMENTS:
-    pick_level          : "bottom" / "1" (floor stack), "top" / "2" (upper stack), "shelf" / "3" (tier 2)
     package             : Pallet to pick, named in locations_file (default: package_5)
     station             : Station to deliver to, named in locations_file (default: station_2)
     locations_file      : Named object centres + dock headings, exported from Unity (Tools > Export ROS Locations)
@@ -33,6 +32,7 @@
     approach            : Handover margin from move_base goal to stage pose (default: 0.6m)
     move_base_timeout   : Timeout in seconds for move_base action goals (default: 180.0s)
     skip_pickup         : Set true if robot already carries a pallet (starts directly at transit)
+    reset_inventory     : Clear the empty-slot list (/warehouse_inventory/empty); use after restarting Unity Play
     transit_speed       : Max cruising linear velocity (default: 0.45 m/s)
     dock_speed          : Max creep docking velocity (default: 0.12 m/s)
     lift_speed          : Mast elevation velocity (default: 0.08 m/s)
@@ -41,11 +41,11 @@
     # 1. Standard Milestone 2 pick-and-deliver mission:
     roslaunch amr_navigation milestone2.launch
 
-    # 2. Pick upper pallet of double-stack:
-    roslaunch amr_navigation milestone2.launch pick_level:=top
+    # 2. Pick a top-tier pallet (lift heights follow its exported height):
+    roslaunch amr_navigation milestone2.launch package:=package_4
 
-    # 3. Pick from second-tier elevated rack shelf:
-    roslaunch amr_navigation milestone2.launch pick_level:=shelf
+    # 3. Old box-face detection (lidar at load-box height):
+    roslaunch amr_navigation milestone2.launch detect_mode:=load_face
 
     # 4. Pick another floor pallet (e.g. south rack, facing 90 deg) and deliver to another station:
     roslaunch amr_navigation milestone2.launch package:=package_101 station:=station_1
@@ -57,6 +57,8 @@
   <param name="/use_sim_time" value="true" />
 
   <arg name="skip_pickup" default="false" />
+  <!-- Picking a lower pallet takes everything stacked on it; picked slots are remembered until reset -->
+  <arg name="reset_inventory" default="false" />
 
   <!-- Named locations: object centres in map, exported from Unity (Tools > Export ROS Locations) -->
   <arg name="locations_file" default="$(find amr_navigation)/config/locations_milestone_3.yaml" />
@@ -74,11 +76,12 @@
   <arg name="approach" default="0.6" />
   <!-- Measure the pallet load face with the laser at the rack stage; abort if not confirmed -->
   <arg name="detect_pallet" default="true" />
+  <!-- rack_legs (Variant: lidar under the bottom plank) or load_face (lidar at load-box height) -->
+  <arg name="detect_mode" default="rack_legs" />
   <arg name="move_base_timeout" default="180.0" />
 
   <arg name="transit_lift_height" default="0.28" />
   <arg name="deposit_lift_height" default="0.21" />
-  <arg name="pick_level" default="bottom" />
 
   <arg name="dock_speed" default="0.12" />
   <arg name="transit_speed" default="0.45" />
@@ -86,7 +89,7 @@
 
   <node pkg="amr_navigation" type="milestone2_mission.py" name="milestone2_mission" output="screen">
     <param name="skip_pickup" value="$(arg skip_pickup)" />
-    <param name="pick_level" value="$(arg pick_level)" />
+    <param name="reset_inventory" value="$(arg reset_inventory)" />
     <rosparam command="load" file="$(arg locations_file)" />
     <param name="package" value="$(arg package)" />
     <param name="station" value="$(arg station)" />
@@ -96,6 +99,7 @@
     <param name="standoff" value="$(arg standoff)" />
     <param name="approach" value="$(arg approach)" />
     <param name="detect_pallet" value="$(arg detect_pallet)" />
+    <param name="detect_mode" value="$(arg detect_mode)" />
     <param name="move_base_timeout" value="$(arg move_base_timeout)" />
     <param name="transit_lift_height" value="$(arg transit_lift_height)" />
     <param name="deposit_lift_height" value="$(arg deposit_lift_height)" />

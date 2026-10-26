@@ -15,3 +15,7 @@ Use a new filename for each subsequent run, e.g.
 
 The PGM stores occupancy pixels; the YAML stores image path, resolution, origin, and thresholds.
 Keep each pair together. These are outputs of a completed mapping run, not the Unity warehouse scene.
+
+`new_map_noobs_01` was captured with gmapping on 2026-10-26 for the XStack Variant in `NewMapnoObs`
+(no static clutter, 8 `Rack-DetectReady2` racks, lidar 361 rays at ~0.04 m). At that height racks show
+as rows of floor-runner posts. Matches `config/locations_milestone_3.yaml` exported from the same scene.

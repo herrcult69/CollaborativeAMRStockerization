@@ -5,6 +5,9 @@ The front lidar (~0.13 m) passes over the pallet blocks and hits the load box. T
 is a straight segment of known width centred on the pallet, so fitting a line to it gives the
 pallet centre and heading in the scan's target frame (odom), independent of AMCL.
 Pure functions only: any sensor that yields 2D points can feed detect_load_face().
+
+Rack-leg detection (detect_rack_legs): with the lidar lowered under the bottom plank (~0.04 m), the scan hits
+the two floor runners flanking the bay instead, which works for full and empty bays alike.
 """
 import math
 
@@ -116,4 +119,73 @@ def detect_load_face(points, exp_x, exp_y, exp_dock_yaw_deg, width=0.35, face_of
     if off > max_offset or abs(dyaw) > max_yaw_deg:
         return None, "detected pallet %.3f m (lateral %+.3f, depth %+.3f) / %+.1f deg from expected" % (
             off, lat, depth, dyaw)
+    return (px, py, exp_dock_yaw_deg + dyaw), None
+
+
+def detect_rack_legs(points, exp_x, exp_y, exp_dock_yaw_deg, span=0.42, leg_width=0.08, leg_offset=0.19,
+                     roi_lateral=0.36, roi_depth=0.15, min_gap=0.03, front_band=0.012, width_tol=0.03,
+                     span_tol=0.03, max_offset=0.10, max_yaw_deg=5.0, min_points=4):
+    """
+    Find the bay of the pallet expected at (exp_x, exp_y) from the two floor runners ("legs") flanking it
+    (Rack-DetectReady2: 0.08 m wide, 0.42 m pitch, under the bottom plank). The laser scans below the plank,
+    so the signature is the same whether the bay holds a pallet or is empty.
+    leg_offset: runner front faces, measured from the pallet centre toward the aisle.
+    Same frame and return convention as detect_load_face().
+
+    :return: ((pallet_x, pallet_y, dock_yaw_deg), None) on success, or (None, reason) on failure.
+    """
+    ux, uy = math.cos(math.radians(exp_dock_yaw_deg)), math.sin(math.radians(exp_dock_yaw_deg))
+    vx, vy = -uy, ux
+    fx, fy = exp_x + leg_offset * ux, exp_y + leg_offset * uy  # expected centre between the front faces
+    lat = lambda p: (p[0] - fx) * vx + (p[1] - fy) * vy
+    depth = lambda p: (p[0] - fx) * ux + (p[1] - fy) * uy     # + = toward the robot
+
+    roi = sorted((p for p in points if abs(lat(p)) <= roi_lateral and abs(depth(p)) <= roi_depth), key=lat)
+    if len(roi) < 2 * min_points:
+        return None, "only %d scan points near the expected rack legs" % len(roi)
+
+    # Rays through the bay throat pass under the plank and leave the ROI, so runners are split by lateral gaps
+    clusters, cl = [], [roi[0]]
+    for a, b in zip(roi, roi[1:]):
+        if lat(b) - lat(a) > min_gap:
+            clusters.append(cl)
+            cl = []
+        cl.append(b)
+    clusters.append(cl)
+
+    # Keep only each runner's front face: its 0.40 m long sides add points along the inner edge only
+    legs = []
+    for cl in clusters:
+        front = max(depth(p) for p in cl)
+        face = [p for p in cl if depth(p) >= front - front_band]
+        if len(face) < min_points:
+            continue
+        lo, hi = lat(face[0]), lat(face[-1])
+        if abs((hi - lo) - leg_width) > width_tol:
+            continue
+        d = sum(depth(p) for p in face) / len(face)
+        m = 0.5 * (lo + hi)
+        legs.append((fx + m * vx + d * ux, fy + m * vy + d * uy, m))
+    pairs = [(a, b) for i, a in enumerate(legs) for b in legs[i + 1:]
+             if abs(math.hypot(b[0] - a[0], b[1] - a[1]) - span) <= span_tol]
+    if not pairs:
+        return None, "no leg pair %.2f m apart among %d leg candidates" % (span, len(legs))
+    left, right = min(pairs, key=lambda ab: abs(ab[0][2] + ab[1][2]))  # pair centred closest to expected
+
+    # Bay normal toward the aisle: perpendicular to the leg-to-leg line, same sense as the dock heading
+    dx, dy = right[0] - left[0], right[1] - left[1]
+    nx, ny = -dy, dx
+    if nx * ux + ny * uy < 0.0:
+        nx, ny = -nx, -ny
+    n = math.hypot(nx, ny)
+    nx, ny = nx / n, ny / n
+    px = 0.5 * (left[0] + right[0]) - leg_offset * nx
+    py = 0.5 * (left[1] + right[1]) - leg_offset * ny
+    yaw_deg = math.degrees(math.atan2(ny, nx))
+
+    off = math.hypot(px - exp_x, py - exp_y)
+    dyaw = (yaw_deg - exp_dock_yaw_deg + 180.0) % 360.0 - 180.0
+    if off > max_offset or abs(dyaw) > max_yaw_deg:
+        return None, "detected bay %.3f m (lateral %+.3f, depth %+.3f) / %+.1f deg from expected" % (
+            off, (px - exp_x) * vx + (py - exp_y) * vy, (px - exp_x) * ux + (py - exp_y) * uy, dyaw)
     return (px, py, exp_dock_yaw_deg + dyaw), None
