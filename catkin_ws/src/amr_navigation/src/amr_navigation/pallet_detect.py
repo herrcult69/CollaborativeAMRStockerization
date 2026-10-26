@@ -122,14 +122,18 @@ def detect_load_face(points, exp_x, exp_y, exp_dock_yaw_deg, width=0.35, face_of
     return (px, py, exp_dock_yaw_deg + dyaw), None
 
 
-def detect_station(points, exp_x, exp_y, exp_dock_yaw_deg, width=0.60, face_offset=0.40, **kw):
+def detect_station(points, exp_x, exp_y, exp_dock_yaw_deg, width=0.60, face_offset=0.40, max_offset=0.20, **kw):
     """
     Find the workbench (station) expected at (exp_x, exp_y): a solid box 0.80 m deep from the floor to 0.225 m,
     so the low lidar sees its aisle-side face as one straight segment 0.60 m wide, 0.40 m in front of the centre.
+    AMCL is looser in the station room (7-10 cm seen) and workbenches stand 3 m apart, so a station may be up
+    to 0.20 m from its expected pose (racks keep 0.10 m: their bays are 0.42 m apart).
     Same frame and return convention as detect_load_face().
     """
-    kw.setdefault("roi_lateral", 0.5 * width + 0.15)  # the face is wider than a load box; keep both ends in view
-    return detect_load_face(points, exp_x, exp_y, exp_dock_yaw_deg, width=width, face_offset=face_offset, **kw)
+    # Keep the whole face in the window even when it sits max_offset to one side
+    kw.setdefault("roi_lateral", 0.5 * width + max_offset + 0.05)
+    return detect_load_face(points, exp_x, exp_y, exp_dock_yaw_deg, width=width, face_offset=face_offset,
+                            max_offset=max_offset, **kw)
 
 
 def detect_rack_legs(points, exp_x, exp_y, exp_dock_yaw_deg, span=0.42, leg_width=0.08, leg_offset=0.19,

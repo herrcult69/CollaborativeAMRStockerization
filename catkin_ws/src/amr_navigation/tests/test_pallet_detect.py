@@ -188,6 +188,17 @@ class StationDetectionTests(unittest.TestCase):
                 self.assertLess(abs(pose[1] - STATION_Y), 0.010)
                 self.assertLess(abs(pose[2] - true_yaw), 1.0)
 
+    def test_tolerates_amcl_error_up_to_20_cm(self):
+        # station_1 / station_3 runs: AMCL put the station 10.2 cm to the side, past the rack's 10 cm limit
+        for seed in range(3):
+            for true_x in (4.102, 3.85, 4.18):
+                pts = fake_scan(workbench(true_x, STATION_Y, 270.0) + BACK_WALL, seed=seed)
+                pose, why = detect_station(pts, 4.0, STATION_Y, 270.0)
+                self.assertIsNone(why, why)
+                self.assertLess(abs(pose[0] - true_x), 0.006)
+        pts = fake_scan(workbench(4.25, STATION_Y, 270.0) + BACK_WALL)
+        self.assertIsNone(detect_station(pts, 4.0, STATION_Y, 270.0)[0])  # 25 cm off: rejected
+
     def test_rejects_missing_station(self):
         pose, why = detect_station(fake_scan(BACK_WALL), 4.0, STATION_Y, 270.0)
         self.assertIsNone(pose)

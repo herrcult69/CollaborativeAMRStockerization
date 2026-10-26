@@ -123,8 +123,11 @@ The newly created `Assets/Editor/RosLocationExport.cs` solves this cleanly:
 | package_2 | 3 | 1 pallet (top gone) | 17 mm (rack) | delivered to station_3 |
 | package_33 | 1 | 2 pallets | 35 mm (rack) | delivered to station_1 |
 | package_5 | 1 | 2 pallets | 32 mm (rack), 73 mm (station) | delivered to station_2, station detected within 1 mm |
+| package_9 | 1 | 2 pallets | 47 mm (rack), 88 mm (station) | delivered to station_1 (after station limit fix) |
+| package_13 | 1 | 2 pallets | 4 mm (rack), 115 mm (station) | delivered to station_3 (after station limit fix) |
 
 **Known limits / follow-ups:**
+- AMCL is 7-12 cm off in the station room (vs 1-5 cm at the racks). `detect_station` allows 0.20 m (racks 0.10 m, which first rejected station_1/3); worth checking AMCL tuning or map quality near the workbenches.
 - Station dock ends ~6 mm / 1.3° off the measured line (robot turns where it stopped, then has a 0.8 m run-in).
 - Stacked pallets are 0.280 m apart vs the 0.30 m stack threshold; consider 0.335 m (midpoint to the 0.390 m shelf gap).
 - After restarting Unity Play, restart localization + navigation (sim clock resets) and use `reset_inventory:=true`.
