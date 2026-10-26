@@ -110,7 +110,7 @@ The newly created `Assets/Editor/RosLocationExport.cs` solves this cleanly:
 **Delivered beyond the original checklist:**
 - **Lift heights from the export:** entry = pallet `height` − 0.040 m, pick = entry + 0.050 m (fixed table and `pick_level` removed). The old 20 mm rise only lifted pallets that dropped at Play start; `Rack-DetectReady2` pallets are now seated on their supports so exported heights match physics (0.112 / 0.392 / 0.782 / 1.062 m).
 - **Pick units + inventory:** picking a pallet takes everything stacked on it (same bay, < 0.30 m apart); picked slots go to `/warehouse_inventory/empty`, empty slots are refused, `reset_inventory:=true` after restarting Play. Box presence remains the warehouse's responsibility.
-- **Station detection:** `detect_station()` measures the workbench face before the reverse, so station docks also correct AMCL error (`detect_station:=false` restores coordinate-only docking).
+- **Station detection:** `detect_station()` measures the workbench face before the reverse, so station docks also correct AMCL error (`detect_station:=false` restores coordinate-only docking). The robot then drives onto the measured line, measures again, and reverses with a 1.2 m runway and the rack's 8 mm entry check, so loads land square (0.1 mm / 0.02°).
 - **Rack fixes:** runners re-centred on their bays, upper shelf aligned, 3 `Rack-DetectReady1` replaced; new map `new_map_noobs_01` is the xstack default.
 
 **End-to-end runs in `NewMapnoObs` (Unity + ROS):**
@@ -125,10 +125,10 @@ The newly created `Assets/Editor/RosLocationExport.cs` solves this cleanly:
 | package_5 | 1 | 2 pallets | 32 mm (rack), 73 mm (station) | delivered to station_2, station detected within 1 mm |
 | package_9 | 1 | 2 pallets | 47 mm (rack), 88 mm (station) | delivered to station_1 (after station limit fix) |
 | package_13 | 1 | 2 pallets | 4 mm (rack), 115 mm (station) | delivered to station_3 (after station limit fix) |
+| package_5 | 1 | 2 pallets | 75 mm (station) | station_2 with alignment: 0.1 mm / 0.02° (was 5.9 mm / 1.27°) |
 
 **Known limits / follow-ups:**
 - AMCL is 7-12 cm off in the station room (vs 1-5 cm at the racks). `detect_station` allows 0.20 m (racks 0.10 m, which first rejected station_1/3); worth checking AMCL tuning or map quality near the workbenches.
-- Station dock ends ~6 mm / 1.3° off the measured line (robot turns where it stopped, then has a 0.8 m run-in).
 - Stacked pallets are 0.280 m apart vs the 0.30 m stack threshold; consider 0.335 m (midpoint to the 0.390 m shelf gap).
 - After restarting Unity Play, restart localization + navigation (sim clock resets) and use `reset_inventory:=true`.
 - `milestone1_mission.py` / `test_dock_reverse.py` still use the old `pick_level` table.

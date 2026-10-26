@@ -146,7 +146,7 @@ def run_mission():
     # Touching the station this close to the stop counts as docked (stall guard in dock_reverse)
     station_contact_tol = float(rospy.get_param("~station_contact_tol", 0.10))
 
-    standoff = float(rospy.get_param("~standoff", 0.8))
+    standoff = float(rospy.get_param("~standoff", 1.2))  # station runway, same as rack_standoff
     rack_standoff = float(rospy.get_param("~rack_standoff", 1.2))
 
     # Distance from stage to the move_base goal; MoveToPoint drives this last stretch straight
@@ -335,11 +335,28 @@ def run_mission():
             nav.stop()
             rospy.logerr("Mission aborted: station not confirmed by the laser.")
             return
-        line_yaw = math.radians(det[2])
-        dock_o = compute_dock_target_pose(det[0], det[1], det[2], station_dock_offset) + (det[2],)
-        turn_at = stage_o
-        stage_o = (dock_o[0] + standoff * math.cos(line_yaw), dock_o[1] + standoff * math.sin(line_yaw), det[2])
-        ok = nav.navigate_to(gx=turn_at[0], gy=turn_at[1], goal_yaw=det[2], pos_tolerance=0.08,
+        def on_line(d):
+            """Dock target and stage on the measured station line."""
+            yaw = math.radians(d[2])
+            dk = compute_dock_target_pose(d[0], d[1], d[2], station_dock_offset) + (d[2],)
+            return dk, (dk[0] + standoff * math.cos(yaw), dk[1] + standoff * math.sin(yaw), d[2])
+
+        # AMCL is 7-12 cm off here, so the robot stands that far beside the measured line. Drive onto the line
+        # (still facing the station) and measure again from there, instead of turning where it stands.
+        dock_o, stage_o = on_line(det)
+        ok = nav.navigate_to(gx=stage_o[0], gy=stage_o[1], goal_yaw=(det[2] + 180.0) % 360.0,
+                             pos_tolerance=0.02, yaw_tolerance=1.0, label="Stocker Staging (on measured line)")
+        if not ok or rospy.is_shutdown():
+            rospy.logwarn("Mission aborted at Stocker Staging.")
+            return
+        det = detect_pallet(tf_buffer, station_o, detect_station, what="STATION")
+        if det is None:
+            nav.stop()
+            rospy.logerr("Mission aborted: station not confirmed by the laser on the measured line.")
+            return
+        dock_o, stage_o = on_line(det)
+        # Turn in place on the line; dock_reverse then follows it, with the rack's 8 mm entry check
+        ok = nav.navigate_to(gx=stage_o[0], gy=stage_o[1], goal_yaw=det[2], pos_tolerance=0.08,
                              label="Stocker Staging (turn)")
     else:
         ok = nav.navigate_to(gx=stage_o[0], gy=stage_o[1], goal_yaw=stage_o[2], pos_tolerance=0.05,
@@ -360,6 +377,7 @@ def run_mission():
         speed=dock_speed,
         pos_tolerance=0.04,
         contact_tol=station_contact_tol,
+        entry_lat_tol=0.008 if use_station_detection else None,  # centre and fork tips within 8 mm, as at the rack
         label="Station Reverse Docking"
     )
     if not ok or rospy.is_shutdown():
