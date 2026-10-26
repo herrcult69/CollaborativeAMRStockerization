@@ -122,6 +122,16 @@ def detect_load_face(points, exp_x, exp_y, exp_dock_yaw_deg, width=0.35, face_of
     return (px, py, exp_dock_yaw_deg + dyaw), None
 
 
+def detect_station(points, exp_x, exp_y, exp_dock_yaw_deg, width=0.60, face_offset=0.40, **kw):
+    """
+    Find the workbench (station) expected at (exp_x, exp_y): a solid box 0.80 m deep from the floor to 0.225 m,
+    so the low lidar sees its aisle-side face as one straight segment 0.60 m wide, 0.40 m in front of the centre.
+    Same frame and return convention as detect_load_face().
+    """
+    kw.setdefault("roi_lateral", 0.5 * width + 0.15)  # the face is wider than a load box; keep both ends in view
+    return detect_load_face(points, exp_x, exp_y, exp_dock_yaw_deg, width=width, face_offset=face_offset, **kw)
+
+
 def detect_rack_legs(points, exp_x, exp_y, exp_dock_yaw_deg, span=0.42, leg_width=0.08, leg_offset=0.19,
                      roi_lateral=0.36, roi_depth=0.15, min_gap=0.03, front_band=0.012, width_tol=0.03,
                      span_tol=0.03, max_offset=0.10, max_yaw_deg=5.0, min_points=4):

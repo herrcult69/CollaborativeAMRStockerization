@@ -26,7 +26,7 @@ from amr_navigation.docking import (PalletDockingController, compute_dock_target
                                     map_pose_to_odom)
 from amr_navigation.lift import LiftController
 from amr_navigation.locations import find_location, pick_unit
-from amr_navigation.pallet_detect import detect_load_face, detect_rack_legs, scan_to_points
+from amr_navigation.pallet_detect import detect_load_face, detect_rack_legs, detect_station, scan_to_points
 
 LIFT_MIN, LIFT_MAX = -0.02, 1.15  # lift_joint limits (xstack_amr.urdf / StackerController.maxLiftHeight)
 INVENTORY_PARAM = "/warehouse_inventory/empty"  # names of picked packages, i.e. empty slots
@@ -53,10 +53,10 @@ def snapshot_map_to_odom(tf_buffer, nav, settle, label):
     return dx, dy, dth
 
 
-def detect_pallet(tf_buffer, expected, detect, scans=5):
+def detect_pallet(tf_buffer, expected, detect, scans=5, what="PALLET"):
     """
-    Measure the pallet with detect(points, x, y, dock_yaw_deg) -> (pose, why) in odom over several scans (robot standing still, facing it).
-    Returns (x, y, dock_yaw_deg) in odom, or None after logging why.
+    Measure the pallet (or station) with detect(points, x, y, dock_yaw_deg) -> (pose, why) in odom over several
+    scans (robot standing still, facing it). Returns (x, y, dock_yaw_deg) in odom, or None after logging why.
     """
     rospy.sleep(0.5)
     found = []
@@ -75,7 +75,7 @@ def detect_pallet(tf_buffer, expected, detect, scans=5):
         else:
             found.append(pose)
     if len(found) < 3:
-        rospy.logerr(">>> PALLET DETECTION FAILED: %d/%d scans found the pallet.", len(found), scans)
+        rospy.logerr(">>> %s DETECTION FAILED: %d/%d scans found it.", what, len(found), scans)
         return None
     n = float(len(found))
     mx, my = sum(p[0] for p in found) / n, sum(p[1] for p in found) / n
@@ -83,14 +83,14 @@ def detect_pallet(tf_buffer, expected, detect, scans=5):
     spread = max(math.hypot(p[0] - mx, p[1] - my) for p in found)
     spread_yaw = max(abs(p[2] - myaw) for p in found)
     if spread > 0.005 or spread_yaw > 1.0:  # 3 mm range noise alone gives ~0.7 deg per scan
-        rospy.logerr(">>> PALLET DETECTION FAILED: scans disagree (%.1f mm, %.2f deg).", spread * 1000.0, spread_yaw)
+        rospy.logerr(">>> %s DETECTION FAILED: scans disagree (%.1f mm, %.2f deg).", what, spread * 1000.0, spread_yaw)
         return None
     ux, uy = math.cos(math.radians(expected[2])), math.sin(math.radians(expected[2]))
     lat = -(mx - expected[0]) * uy + (my - expected[1]) * ux
     depth = (mx - expected[0]) * ux + (my - expected[1]) * uy
-    rospy.loginfo(">>> PALLET DETECTED (odom): (%.3f, %.3f, %.2f deg) | expected (%.3f, %.3f, %.2f) | "
+    rospy.loginfo(">>> %s DETECTED (odom): (%.3f, %.3f, %.2f deg) | expected (%.3f, %.3f, %.2f) | "
                   "lateral %+.1f mm, depth %+.1f mm, yaw %+.2f deg | %d scans",
-                  mx, my, myaw, expected[0], expected[1], expected[2],
+                  what, mx, my, myaw, expected[0], expected[1], expected[2],
                   lat * 1000.0, depth * 1000.0, myaw - expected[2], len(found))
     return mx, my, myaw
 
@@ -201,6 +201,8 @@ def run_mission():
         detect = lambda pts, x, y, yaw: detect_load_face(pts, x, y, yaw, width=load_width, face_offset=load_face_offset)
     else:
         detect = detect_rack_legs
+    # The workbench is a solid box down to the floor: its face corrects AMCL error before the reverse, as at the rack
+    use_station_detection = bool(rospy.get_param("~detect_station", True))
 
     client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
     rospy.loginfo("Waiting for move_base action server...")
@@ -320,7 +322,28 @@ def run_mission():
     dock_o = map_pose_to_odom(target_deposit_x, target_deposit_y, station_yaw, *T)
 
     rospy.loginfo("\n>>> [LEG 5] MoveToPoint -> Stocker Staging")
-    ok = nav.navigate_to(gx=stage_o[0], gy=stage_o[1], goal_yaw=stage_o[2], pos_tolerance=0.05, label="Stocker Staging")
+    if use_station_detection:
+        # Same as the rack: stop facing the station so the front laser sees its face, then turn for the reverse
+        ok = nav.navigate_to(gx=stage_o[0], gy=stage_o[1], goal_yaw=(stage_o[2] + 180.0) % 360.0,
+                             pos_tolerance=0.05, yaw_tolerance=2.0, label="Stocker Staging (facing station)")
+        if not ok or rospy.is_shutdown():
+            rospy.logwarn("Mission aborted at Stocker Staging.")
+            return
+        station_o = map_pose_to_odom(station_x, station_y, station_yaw, *T)
+        det = detect_pallet(tf_buffer, station_o, detect_station, what="STATION")
+        if det is None:
+            nav.stop()
+            rospy.logerr("Mission aborted: station not confirmed by the laser.")
+            return
+        line_yaw = math.radians(det[2])
+        dock_o = compute_dock_target_pose(det[0], det[1], det[2], station_dock_offset) + (det[2],)
+        turn_at = stage_o
+        stage_o = (dock_o[0] + standoff * math.cos(line_yaw), dock_o[1] + standoff * math.sin(line_yaw), det[2])
+        ok = nav.navigate_to(gx=turn_at[0], gy=turn_at[1], goal_yaw=det[2], pos_tolerance=0.08,
+                             label="Stocker Staging (turn)")
+    else:
+        ok = nav.navigate_to(gx=stage_o[0], gy=stage_o[1], goal_yaw=stage_o[2], pos_tolerance=0.05,
+                             label="Stocker Staging")
     if not ok or rospy.is_shutdown():
         rospy.logwarn("Mission aborted at Stocker Staging.")
         return

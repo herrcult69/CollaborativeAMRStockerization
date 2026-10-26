@@ -78,6 +78,8 @@
   <arg name="detect_pallet" default="true" />
   <!-- rack_legs (Variant: lidar under the bottom plank) or load_face (lidar at load-box height) -->
   <arg name="detect_mode" default="rack_legs" />
+  <!-- Measure the workbench face with the laser before reversing onto the station -->
+  <arg name="detect_station" default="true" />
   <arg name="move_base_timeout" default="180.0" />
 
   <arg name="transit_lift_height" default="0.28" />
@@ -100,6 +102,7 @@
     <param name="approach" value="$(arg approach)" />
     <param name="detect_pallet" value="$(arg detect_pallet)" />
     <param name="detect_mode" value="$(arg detect_mode)" />
+    <param name="detect_station" value="$(arg detect_station)" />
     <param name="move_base_timeout" value="$(arg move_base_timeout)" />
     <param name="transit_lift_height" value="$(arg transit_lift_height)" />
     <param name="deposit_lift_height" value="$(arg deposit_lift_height)" />

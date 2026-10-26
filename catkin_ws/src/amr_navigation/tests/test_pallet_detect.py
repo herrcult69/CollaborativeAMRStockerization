@@ -11,7 +11,7 @@ _pkg_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if os.path.isdir(_pkg_src) and _pkg_src not in sys.path:
     sys.path.insert(0, _pkg_src)
 
-from amr_navigation.pallet_detect import detect_load_face, detect_rack_legs, scan_to_points
+from amr_navigation.pallet_detect import detect_load_face, detect_rack_legs, detect_station, scan_to_points
 
 LASER = (4.0, 3.91, math.radians(90.0))  # drive_center stage (4.00, 3.58) + 0.33 m, facing the rack
 
@@ -162,6 +162,41 @@ class RackLegDetectionTests(unittest.TestCase):
             pose, why = detect_rack_legs(pts, 4.0, 5.0, 270.0)
             self.assertIsNone(why, why)
             self.assertLess(abs(pose[0] - 4.02), 0.010)
+
+
+def workbench(px, py, dock_yaw_deg, width=0.60, depth=0.80):
+    """Workbench footprint as a box outline: `width` across the aisle-side face, `depth` along the dock axis."""
+    ux, uy = math.cos(math.radians(dock_yaw_deg)), math.sin(math.radians(dock_yaw_deg))
+    vx, vy = -uy, ux
+    c = [(px + sl * width / 2 * vx + sd * depth / 2 * ux, py + sl * width / 2 * vy + sd * depth / 2 * uy)
+         for sl, sd in ((-1, 1), (1, 1), (1, -1), (-1, -1))]
+    return [(c[i], c[(i + 1) % 4]) for i in range(4)]
+
+
+# Station staging: drive_center 0.54 + 0.80 m from the centre, laser 0.33 m ahead -> face 0.61 m from the laser
+STATION_Y = LASER[1] + 0.61 + 0.40
+
+
+class StationDetectionTests(unittest.TestCase):
+    def test_finds_shifted_and_rotated_station(self):
+        for seed in range(5):
+            for true_x, true_yaw in ((4.0, 270.0), (4.03, 270.0), (3.96, 268.0), (4.02, 272.5)):
+                pts = fake_scan(workbench(true_x, STATION_Y, true_yaw) + BACK_WALL, seed=seed)
+                pose, why = detect_station(pts, 4.0, STATION_Y, 270.0)
+                self.assertIsNone(why, why)
+                self.assertLess(abs(pose[0] - true_x), 0.006)
+                self.assertLess(abs(pose[1] - STATION_Y), 0.010)
+                self.assertLess(abs(pose[2] - true_yaw), 1.0)
+
+    def test_rejects_missing_station(self):
+        pose, why = detect_station(fake_scan(BACK_WALL), 4.0, STATION_Y, 270.0)
+        self.assertIsNone(pose)
+
+    def test_rejects_wrong_size_face(self):
+        # The 0.80 m side of the box facing the robot would mean the map has the station turned 90 deg
+        pts = fake_scan(workbench(4.0, STATION_Y, 270.0, width=0.80, depth=0.60) + BACK_WALL)
+        pose, why = detect_station(pts, 4.0, STATION_Y, 270.0)
+        self.assertIsNone(pose)
 
 
 if __name__ == "__main__":

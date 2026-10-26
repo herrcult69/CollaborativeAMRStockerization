@@ -83,6 +83,8 @@ Example, `package_5`: `5.122 − 0.342 = 4.780`. drive_center stops at (4.003, 4
 
 Lift heights follow the pallet `height`: entry 0.040 m below it (tines mid-pocket), then a 0.050 m pick lift; pallets needing more than the 1.15 m mast stroke are rejected.
 
+At the station the robot also stops facing it and measures the workbench face (`detect_station()`: a straight 0.60 m face, 0.40 m in front of the centre, seen by the low lidar), then turns and reverses along the measured line. Disable with `detect_station:=false`.
+
 ---
 
 ## 3. Getting to the rack
