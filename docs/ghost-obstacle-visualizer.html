@@ -1,0 +1,1131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Warehouse AMR Ghost Obstacle & Collision Recovery</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    canvas { display: block; image-rendering: pixelated; }
+    .scene-pill { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+    .scene-pill.active {
+      background: var(--primary) !important;
+      color: var(--primary-foreground) !important;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
+      border-color: transparent !important;
+      transform: translateY(-1px);
+    }
+    .custom-scroll::-webkit-scrollbar { width: 5px; }
+    .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+    .custom-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased p-3 sm:p-5">
+
+  <!-- Header -->
+  <div class="mb-4 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+    <div>
+      <div class="flex items-center gap-2">
+        <span class="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-red-500/10 text-red-500 font-bold text-sm">⚠️</span>
+        <h1 class="text-lg sm:text-xl font-bold tracking-tight">Warehouse AMR: Ghost Obstacle & Wall Push Simulator</h1>
+      </div>
+      <p class="text-xs sm:text-sm text-[var(--muted-foreground)] mt-0.5">
+        High-fidelity simulation of narrow aisle dynamics, $180^\circ$ LiDAR blind spot, costmap traps, and deterministic recovery.
+      </p>
+    </div>
+
+    <!-- Playback Controls -->
+    <div class="flex items-center gap-2 self-start md:self-auto">
+      <button id="btn-play-pause" onclick="togglePlay()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--accent)] cursor-pointer flex items-center gap-1.5 shadow-sm">
+        <span id="play-icon">⏸️</span> <span id="play-text">Pause</span>
+      </button>
+      <button onclick="resetScene()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--accent)] cursor-pointer flex items-center gap-1 shadow-sm">
+        🔄 Reset
+      </button>
+      <div class="flex items-center gap-1 bg-[var(--card)] border border-[var(--border)] rounded-lg p-0.5 text-xs">
+        <button onclick="setSimSpeed(0.5)" id="spd-05" class="px-2 py-1 rounded hover:bg-[var(--accent)]">0.5x</button>
+        <button onclick="setSimSpeed(1.0)" id="spd-10" class="px-2 py-1 rounded bg-[var(--primary)] text-[var(--primary-foreground)] font-bold">1x</button>
+        <button onclick="setSimSpeed(2.0)" id="spd-20" class="px-2 py-1 rounded hover:bg-[var(--accent)]">2x</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scene Navigation Pills -->
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mb-4">
+    <button onclick="switchScene(0)" id="pill-0" class="scene-pill active text-xs p-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-left cursor-pointer flex flex-col gap-0.5">
+      <span class="font-bold flex items-center gap-1"><span>1️⃣</span> Normal Navigation</span>
+      <span class="text-[11px] opacity-75 truncate">180° LiDAR in narrow aisle</span>
+    </button>
+    <button onclick="switchScene(1)" id="pill-1" class="scene-pill text-xs p-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-left cursor-pointer flex flex-col gap-0.5">
+      <span class="font-bold flex items-center gap-1 text-red-400"><span>💥</span> Side Push & Ghost</span>
+      <span class="text-[11px] opacity-75 truncate">Obstacle pushed into blind spot</span>
+    </button>
+    <button onclick="switchScene(2)" id="pill-2" class="scene-pill text-xs p-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-left cursor-pointer flex flex-col gap-0.5">
+      <span class="font-bold flex items-center gap-1 text-amber-400"><span>⚡</span> Inflation Trap & Stall</span>
+      <span class="text-[11px] opacity-75 truncate">TEB trajectory failure & jitter</span>
+    </button>
+    <button onclick="switchScene(3)" id="pill-3" class="scene-pill text-xs p-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-left cursor-pointer flex flex-col gap-0.5">
+      <span class="font-bold flex items-center gap-1 text-emerald-400"><span>🧹</span> Fix 1: Auto-Clear</span>
+      <span class="text-[11px] opacity-75 truncate">Deterministic stall clearing</span>
+    </button>
+    <button onclick="switchScene(4)" id="pill-4" class="scene-pill text-xs p-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-left cursor-pointer flex flex-col gap-0.5">
+      <span class="font-bold flex items-center gap-1 text-purple-400"><span>🔙</span> Fix 2: Safe Reverse</span>
+      <span class="text-[11px] opacity-75 truncate">Breadcrumb wake escape</span>
+    </button>
+  </div>
+
+  <!-- Main Viewport: Canvas + Detailed Engineering Sidebar -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+    
+    <!-- Simulation Canvas Panel -->
+    <div class="lg:col-span-8 flex flex-col gap-2">
+      <div class="relative bg-[var(--card)] border border-[var(--border)] rounded-2xl p-2 sm:p-3 shadow-md overflow-hidden flex justify-center items-center">
+        <canvas id="simCanvas" width="760" height="460" class="w-full h-auto max-h-[500px] rounded-lg"></canvas>
+
+        <!-- Dynamic Overlay HUD -->
+        <div class="absolute top-4 left-4 bg-slate-900/80 backdrop-blur-md text-white border border-slate-700/60 rounded-xl px-3 py-2 text-xs flex flex-col gap-1 pointer-events-none shadow-lg">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full" id="hud-status-dot" style="background:#22c55e"></span>
+            <span class="font-bold tracking-wide uppercase" id="hud-status-text">STATUS: NORMAL AISLE TRANSIT</span>
+          </div>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-slate-300 font-mono mt-1 border-t border-slate-700/60 pt-1">
+            <div>AMR Vel: <span id="telemetry-v" class="text-emerald-400 font-bold">0.25 m/s</span></div>
+            <div>Dist to Wall: <span id="telemetry-wall" class="text-blue-400">0.82 m</span></div>
+            <div>LiDAR FOV: <span class="text-yellow-400 font-bold">180° Forward</span></div>
+            <div>Costmap State: <span id="telemetry-cost" class="text-slate-200">CLEAR</span></div>
+          </div>
+        </div>
+
+        <!-- Costmap Grid Overlay Toggle -->
+        <div class="absolute bottom-4 right-4 flex items-center gap-2 bg-slate-900/80 backdrop-blur-md text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5 text-xs shadow-md">
+          <input type="checkbox" id="toggle-grid" checked onchange="toggleCostmapGrid()" class="cursor-pointer accent-blue-500">
+          <label for="toggle-grid" class="cursor-pointer select-none text-[11px] font-medium">Show Costmap Inflation Grid</label>
+        </div>
+      </div>
+
+      <!-- Quick Legend Bar -->
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-2.5 text-xs text-[var(--muted-foreground)] flex flex-wrap items-center justify-between gap-y-1.5 gap-x-3 shadow-sm">
+        <div class="flex items-center gap-1.5">
+          <span class="w-3.5 h-3.5 rounded bg-blue-500 inline-block border border-blue-600"></span>
+          <span class="font-medium text-[var(--foreground)]">AMR Chassis ($0.91\,\text{m}$)</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="w-3.5 h-3.5 rounded bg-amber-500 inline-block border border-amber-600"></span>
+          <span class="font-medium text-[var(--foreground)]">Forks / Tail ($0.54\,\text{m}$)</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="w-3.5 h-3.5 rounded bg-emerald-500/20 border border-emerald-500 inline-block"></span>
+          <span class="font-medium text-[var(--foreground)]">LiDAR Rays ($180^\circ$)</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="w-3.5 h-3.5 rounded bg-red-500/30 border border-red-500 border-dashed inline-block"></span>
+          <span class="font-medium text-red-400">Blind Zone ($180^\circ$ Rear)</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="w-3.5 h-3.5 rounded bg-amber-500/20 border border-amber-400 inline-block"></span>
+          <span class="font-medium text-amber-500">Inflation Halo ($0.50\,\text{m}$)</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="w-3.5 h-3.5 rounded bg-red-600 inline-block"></span>
+          <span class="font-medium text-red-500">Lethal Cost (254)</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Technical Analysis & Walkthrough Sidebar -->
+    <div class="lg:col-span-4 flex flex-col gap-3">
+      <div id="narrative-card" class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 shadow-md custom-scroll max-h-[540px] overflow-y-auto">
+        <!-- Content dynamically injected via JS -->
+      </div>
+    </div>
+  </div>
+
+<script>
+// =============================================================================
+// SIMULATION ENGINE: 2D WAREHOUSE, SENSORS & COSTMAP
+// =============================================================================
+
+const cvs = document.getElementById('simCanvas');
+const ctx = cvs.getContext('2d');
+const W = cvs.width, H = cvs.height;
+
+// Physics / Scale Coordinates (1 meter = 55 pixels)
+const PPM = 55;
+const ORIGIN_X = W * 0.40;
+const ORIGIN_Y = H * 0.50;
+
+function toCanvas(x, y) {
+  return [ORIGIN_X + x * PPM, ORIGIN_Y - y * PPM];
+}
+
+function fromCanvas(cx, cy) {
+  return [(cx - ORIGIN_X) / PPM, -(cy - ORIGIN_Y) / PPM];
+}
+
+// AMR Physical Profile (Matching robot_xstack.yaml)
+const AMR = {
+  nose_x: 0.37,
+  tail_x: -0.54,
+  half_w: 0.23,
+  lidar_x: 0.33,
+  length: 0.91,
+  width: 0.46
+};
+
+// Warehouse Aisle Geometry
+const AISLE = {
+  topRackY: 1.25,     // Top pallet rack upright line (y = +1.25m)
+  bottomRackY: -1.25, // Bottom pallet rack upright line (y = -1.25m)
+  width: 2.50,        // Total aisle width
+  postSpacing: 1.4,   // Steel upright spacing
+  inflationR: 0.50    // Costmap inflation radius (meters)
+};
+
+// State Variables
+let currentScene = 0;
+let simTime = 0;
+let isPlaying = true;
+let simSpeed = 1.0;
+let showCostmapGrid = true;
+let animReq = null;
+
+// Dynamic Obstacle / Recovery State
+let ghostCells = [];
+let breadcrumbs = [];
+let stallTimer = 0.0;
+let tebFailedTrajectories = [];
+
+// =============================================================================
+// SCENE NARRATIVE CONTENT (EXACT PROBLEM & SOLUTIONS)
+// =============================================================================
+
+const SCENE_DETAILS = [
+  // Scene 0
+  {
+    badge: "SCENE 1 OF 5",
+    badgeColor: "bg-blue-500/10 text-blue-500 border-blue-500/20",
+    title: "Narrow Warehouse Aisle & Sensor Constraints",
+    content: `
+      <div class="space-y-3 text-xs sm:text-sm leading-relaxed">
+        <p>
+          The <strong>xstack AMR</strong> operates in a narrow $\\approx 2.5\\,\\text{m}$ warehouse aisle between heavy steel pallet racks loaded with goods.
+        </p>
+        <div class="bg-[var(--background)] p-3 rounded-xl border border-[var(--border)] space-y-1.5 font-mono text-xs">
+          <div class="text-[var(--muted-foreground)] font-semibold uppercase tracking-wider text-[11px]">Robot Geometry:</div>
+          <div>• Body length: <span class="text-blue-400 font-bold">0.91 m</span> (Asymmetric)</div>
+          <div>• Front nose: <span class="text-blue-400 font-bold">+0.37 m</span> ahead of drive axle</div>
+          <div>• Rear forks/tail: <span class="text-amber-400 font-bold">-0.54 m</span> behind axle</div>
+          <div>• 2D LiDAR mount: <span class="text-emerald-400 font-bold">+0.33 m</span> forward</div>
+        </div>
+        <p>
+          <strong class="text-emerald-400">Why $180^\\circ$ LiDAR only?</strong> AMRs with vertical lift masts, hydraulic cylinders, and forks physically occlude rays to the side and rear. A forward-facing $180^\\circ$ planar scan is the standard industrial layout.
+        </p>
+        <div class="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300 text-xs">
+          <strong>The Vulnerability:</strong> Anything that enters the shaded red rear hemisphere is completely invisible to ROS's sensor pipeline.
+        </div>
+      </div>
+    `
+  },
+
+  // Scene 1
+  {
+    badge: "SCENE 2 OF 5: THE CORE BUG",
+    badgeColor: "bg-red-500/10 text-red-500 border-red-500/20",
+    title: "Side Collision & Pushed-to-Wall Trap",
+    content: `
+      <div class="space-y-3 text-xs sm:text-sm leading-relaxed">
+        <p>
+          Watch the animation: An automated cart approaches diagonally from the upper aisle, strikes the AMR's upper flank, and <strong>physically shoves the AMR downward toward Pallet Rack Bay B</strong>.
+        </p>
+        <ol class="list-decimal ml-4 space-y-2 text-xs">
+          <li><strong>Impact & Momentum Transfer:</strong> The incoming cart hits the AMR with downward momentum ($\vec{F}_{\\text{push}}$), displacing the chassis downward until its lower edge is just <span class="text-red-400 font-bold">0.22 m</span> from the steel uprights of Bay B.</li>
+          <li><strong>LiDAR Arc Slip:</strong> The cart glances off and rolls leftward past the AMR's tail, slipping behind the $+90^\\circ$ beam edge directly into the blind rear hemisphere.</li>
+          <li><strong>Ghost Obstacle Creation:</strong> In ROS <code class="text-red-400">costmap_2d::ObstacleLayer</code>, cells marked <em>LETHAL</em> (254) are <strong>never cleared by elapsed time</strong>. They are strictly cleared when a fresh ray passes through them.</li>
+        </ol>
+        <div class="p-3 bg-red-500/15 border border-red-500/30 rounded-xl text-red-300 text-xs font-medium">
+          ❌ <strong>The Trap:</strong> Because the front LiDAR cannot shoot backward, no laser ray ever reaches the blind spot. The costmap permanently believes a concrete obstacle is glued to the robot's upper flank!
+        </div>
+      </div>
+    `
+  },
+
+  // Scene 2
+  {
+    badge: "SCENE 3 OF 5: PLANNER FAILURE",
+    badgeColor: "bg-amber-500/10 text-amber-500 border-amber-500/20",
+    title: "Combined Inflation Trap & Oscillation",
+    content: `
+      <div class="space-y-3 text-xs sm:text-sm leading-relaxed">
+        <p>
+          Now observe what happens to the <strong>TEB Local Planner</strong>:
+        </p>
+        <div class="space-y-2 text-xs">
+          <div class="p-2.5 rounded-lg bg-[var(--background)] border border-[var(--border)]">
+            <strong>1. Double Inflation Sandwich:</strong> Pallet Rack Bay B below projects a $0.50\\,\\text{m}$ inflation halo upward. The phantom ghost obstacle above projects a $0.50\\,\\text{m}$ inflation halo downward.
+          </div>
+          <div class="p-2.5 rounded-lg bg-[var(--background)] border border-[var(--border)]">
+            <strong>2. Footprint Inscribed:</strong> The AMR footprint is completely trapped inside the combined lethal/high-cost zone.
+          </div>
+          <div class="p-2.5 rounded-lg bg-[var(--background)] border border-[var(--border)]">
+            <strong>3. Trajectory Evaluation Failure:</strong> TEB attempts candidate elastic bands (shown in red X). Every candidate violates the <code class="text-amber-400">min_obstacle_dist</code> constraint.
+          </div>
+        </div>
+        <p class="text-xs text-[var(--muted-foreground)]">
+          <strong>The Freeze / Oscillation:</strong> The robot outputs micro-twist commands ($v = \\pm 0.02\\,\\text{m/s}$, $\\omega = \\pm 0.03\\,\\text{rad/s}$) trying to find clearance. Since <code class="text-red-400">recovery_behavior_enabled: false</code>, it cannot clear costmaps and freezes until the 60s timeout aborts the mission.
+        </p>
+      </div>
+    `
+  },
+
+  // Scene 3
+  {
+    badge: "SOLUTION 1: DETERMINISTIC FIX",
+    badgeColor: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
+    title: "Costmap Auto-Clear on Stall Watchdog",
+    content: `
+      <div class="space-y-3 text-xs sm:text-sm leading-relaxed">
+        <p>
+          The simplest, most reliable deterministic solution without modifying hardware:
+        </p>
+        <div class="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-2 text-xs">
+          <div class="font-bold text-emerald-400 flex items-center gap-1.5">
+            <span>⏱️</span> Watchdog Logic:
+          </div>
+          <p>
+            A supervisor monitors <code class="text-slate-300">/odom</code> during active goals. If the robot travels $< 0.08\\,\\text{m}$ over $3.0\\,\\text{s}$ while issuing velocity commands:
+          </p>
+          <div class="font-mono bg-black/40 p-2 rounded text-[11px] text-emerald-300">
+            rosservice call /move_base/clear_costmaps "{}"
+          </div>
+        </div>
+        <ol class="list-decimal ml-4 space-y-1.5 text-xs">
+          <li><strong>Instant Wipe:</strong> All obstacle layer cells outside active observation are reset to FREE.</li>
+          <li><strong>Immediate True Re-marking:</strong> In the very next laser scan ($0.1\\,\\text{s}$ later), the real rack uprights of Bay B are re-marked. But the ghost obstacle on the upper flank is <em>permanently gone</em>!</li>
+          <li><strong>Unblocked Path:</strong> TEB immediately finds a collision-free path steering upward away from Bay B and continuing down the aisle corridor.</li>
+        </ol>
+      </div>
+    `
+  },
+
+  // Scene 4
+  {
+    badge: "SOLUTION 2: PHYSICAL ESCAPE",
+    badgeColor: "bg-purple-500/10 text-purple-500 border-purple-500/20",
+    title: "Breadcrumb Safe Reverse Nudge (ISO 3691-4)",
+    content: `
+      <div class="space-y-3 text-xs sm:text-sm leading-relaxed">
+        <p>
+          What if the AMR was pushed so close to the rack that <em>even after clearing the ghost</em>, the robot's footprint is still touching Bay B's inflation halo?
+        </p>
+        <div class="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs space-y-2">
+          <div class="font-bold text-purple-400 flex items-center gap-1">
+            <span>🛡️</span> The Breadcrumb "Wake Trail" Principle:
+          </div>
+          <p>
+            Under industrial safety standards, an AMR with a blind rear must <strong>never reverse blindly into unmapped space</strong>. Instead, it reverses exclusively along its own recent odometry path:
+          </p>
+          <ul class="list-disc ml-4 space-y-1 text-slate-300">
+            <li>Only traverses space it occupied $< 3.0\\,\\text{s}$ ago (proven free of humans/forklifts).</li>
+            <li>Distance hard-capped at <span class="font-bold text-purple-300">0.25 m</span>.</li>
+            <li>Creep speed clamped to <span class="font-bold text-purple-300">0.05 m/s</span>.</li>
+          </ul>
+        </div>
+        <p class="text-xs">
+          This backwards nudge pulls the chassis upward and back away from Bay B, detaching from the rack inflation zone and allowing TEB to steer cleanly back to the aisle center.
+        </p>
+      </div>
+    `
+  }
+];
+
+function updateNarrative(idx) {
+  const sc = SCENE_DETAILS[idx];
+  const card = document.getElementById('narrative-card');
+  card.innerHTML = `
+    <div class="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold border tracking-wider uppercase mb-2 ${sc.badgeColor}">
+      ${sc.badge}
+    </div>
+    <h2 class="text-base sm:text-lg font-bold mb-2">${sc.title}</h2>
+    ${sc.content}
+  `;
+}
+
+function switchScene(idx) {
+  currentScene = idx;
+  simTime = 0;
+  stallTimer = 0;
+  ghostCells = [];
+  breadcrumbs = [];
+  tebFailedTrajectories = [];
+
+  document.querySelectorAll('.scene-pill').forEach((p, i) => {
+    p.classList.toggle('active', i === idx);
+  });
+
+  updateNarrative(idx);
+}
+
+function togglePlay() {
+  isPlaying = !isPlaying;
+  document.getElementById('play-icon').textContent = isPlaying ? '⏸️' : '▶️';
+  document.getElementById('play-text').textContent = isPlaying ? 'Pause' : 'Play';
+}
+
+function resetScene() {
+  switchScene(currentScene);
+}
+
+function setSimSpeed(spd) {
+  simSpeed = spd;
+  document.getElementById('spd-05').className = `px-2 py-1 rounded ${spd === 0.5 ? 'bg-[var(--primary)] text-[var(--primary-foreground)] font-bold' : 'hover:bg-[var(--accent)]'}`;
+  document.getElementById('spd-10').className = `px-2 py-1 rounded ${spd === 1.0 ? 'bg-[var(--primary)] text-[var(--primary-foreground)] font-bold' : 'hover:bg-[var(--accent)]'}`;
+  document.getElementById('spd-20').className = `px-2 py-1 rounded ${spd === 2.0 ? 'bg-[var(--primary)] text-[var(--primary-foreground)] font-bold' : 'hover:bg-[var(--accent)]'}`;
+}
+
+function toggleCostmapGrid() {
+  showCostmapGrid = document.getElementById('toggle-grid').checked;
+}
+
+// =============================================================================
+// GRAPHICS & DRAWING PROCEDURES
+// =============================================================================
+
+function drawWarehouseEnvironment() {
+  // Floor background
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, W, H);
+
+  // Concrete floor joints / grid
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1;
+  for (let x = -6; x <= 6; x += 1.0) {
+    const [cx1] = toCanvas(x, -3);
+    const [cx2] = toCanvas(x, 3);
+    ctx.beginPath(); ctx.moveTo(cx1, 0); ctx.lineTo(cx1, H); ctx.stroke();
+  }
+  for (let y = -3; y <= 3; y += 1.0) {
+    const [, cy] = toCanvas(0, y);
+    ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
+  }
+
+  // Draw Top & Bottom Pallet Racks
+  drawPalletRack(AISLE.topRackY, 1.2, true);
+  drawPalletRack(AISLE.bottomRackY, -1.2, false);
+
+  // Draw Yellow Hazard / Clearance Lines along the rack perimeter
+  drawCautionStripe(AISLE.topRackY);
+  drawCautionStripe(AISLE.bottomRackY);
+
+  // Aisle Centerline (Dashed navigation corridor guide)
+  const [, cY] = toCanvas(0, 0);
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([8, 8]);
+  ctx.beginPath(); ctx.moveTo(0, cY); ctx.lineTo(W, cY); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawPalletRack(yBase, depth, isTop) {
+  const [, cyBase] = toCanvas(0, yBase);
+  const [, cyDeep] = toCanvas(0, yBase + depth);
+  const rHeight = Math.abs(cyDeep - cyBase);
+  const rTop = Math.min(cyBase, cyDeep);
+
+  // Rack base structure (Dark industrial steel gray)
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(0, rTop, W, rHeight);
+
+  // Steel longitudinal beam
+  ctx.fillStyle = '#334155';
+  ctx.fillRect(0, isTop ? cyBase - 4 : cyBase, W, 4);
+
+  // Steel upright columns & pallets
+  for (let x = -5.5; x <= 5.5; x += AISLE.postSpacing) {
+    const [cx] = toCanvas(x, 0);
+
+    // Wood Pallet sitting in rack
+    const pWidth = PPM * 1.1;
+    const pHeight = rHeight * 0.75;
+    const pY = isTop ? rTop + (rHeight - pHeight) - 6 : rTop + 6;
+    ctx.fillStyle = '#78350f'; // Wood brown
+    ctx.fillRect(cx + 6, pY, pWidth - 12, pHeight);
+
+    // Pallet slats
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(cx + 8, pY + 4, pWidth - 16, 4);
+    ctx.fillRect(cx + 8, pY + pHeight - 8, pWidth - 16, 4);
+
+    // Carton cargo on pallet
+    ctx.fillStyle = '#b45309';
+    ctx.fillRect(cx + 12, pY + 8, pWidth - 24, pHeight - 16);
+
+    // Steel Upright Column (High visibility safety orange / dark gray)
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(cx - 5, rTop, 10, rHeight);
+    ctx.strokeStyle = '#ea580c';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx - 5, rTop, 10, rHeight);
+
+    // Perforation holes on upright
+    ctx.fillStyle = '#0f172a';
+    for (let py = rTop + 8; py < rTop + rHeight - 8; py += 12) {
+      ctx.fillRect(cx - 2, py, 4, 5);
+    }
+  }
+
+  // Label
+  ctx.fillStyle = '#64748b';
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'left';
+  const labelText = isTop ? "PALLET RACK BAY A (STATIC WALL)" : "PALLET RACK BAY B (STATIC WALL)";
+  ctx.fillText(labelText, 16, isTop ? rTop + 18 : rTop + rHeight - 8);
+}
+
+function drawCautionStripe(yPos) {
+  const [, cy] = toCanvas(0, yPos);
+  ctx.save();
+  ctx.strokeStyle = '#eab308';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([12, 6]);
+  ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
+  ctx.restore();
+}
+
+function drawCostmapInflationGrid(rx, ry, robotAngle) {
+  if (!showCostmapGrid) return;
+
+  const cellM = 0.10; // 10 cm costmap cell resolution
+  const gridW = 4.0;
+  const gridH = 3.0;
+
+  const minX = rx - gridW / 2;
+  const maxX = rx + gridW / 2;
+  const minY = Math.max(-1.4, ry - gridH / 2);
+  const maxY = Math.min(1.4, ry + gridH / 2);
+
+  ctx.save();
+
+  for (let x = minX; x <= maxX; x += cellM) {
+    for (let y = minY; y <= maxY; y += cellM) {
+      // Calculate distance to static racks
+      const distTop = Math.abs(y - AISLE.topRackY);
+      const distBot = Math.abs(y - AISLE.bottomRackY);
+      const distWall = Math.min(distTop, distBot);
+
+      // Distance to ghost cells
+      let distGhost = Infinity;
+      for (const gc of ghostCells) {
+        const d = Math.hypot(x - gc.x, y - gc.y);
+        if (d < distGhost) distGhost = d;
+      }
+
+      let cost = 0;
+
+      // Wall inflation (0.50m)
+      if (distWall < AISLE.inflationR) {
+        cost = Math.max(cost, Math.floor(253 * (1.0 - distWall / AISLE.inflationR)));
+      }
+
+      // Ghost obstacle inflation (0.50m)
+      if (distGhost < AISLE.inflationR) {
+        const gCost = distGhost < 0.15 ? 254 : Math.floor(253 * (1.0 - distGhost / AISLE.inflationR));
+        cost = Math.max(cost, gCost);
+      }
+
+      if (cost > 15) {
+        const [cx, cy] = toCanvas(x, y);
+        const sz = cellM * PPM;
+
+        let fillCol;
+        if (cost >= 254) {
+          fillCol = 'rgba(239, 68, 68, 0.65)'; // Lethal (bright red)
+        } else if (cost >= 180) {
+          fillCol = 'rgba(249, 115, 22, 0.40)'; // Inscribed / High cost
+        } else {
+          fillCol = 'rgba(234, 179, 8, 0.20)'; // Inflation decay
+        }
+
+        ctx.fillStyle = fillCol;
+        ctx.fillRect(cx - sz / 2, cy - sz / 2, sz - 0.5, sz - 0.5);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawAMR(x, y, yaw, showBlindZone = true) {
+  ctx.save();
+  const [cx, cy] = toCanvas(x, y);
+  ctx.translate(cx, cy);
+  ctx.rotate(-yaw);
+
+  // 1. Shaded Blind Zone Arc (Rear 180° Hemisphere)
+  if (showBlindZone) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(AMR.lidar_x * PPM, 0);
+    // Arc covering from +90° to -90° in the rear direction
+    ctx.arc(AMR.lidar_x * PPM, 0, 4.2 * PPM, Math.PI / 2, -Math.PI / 2, false);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.08)';
+    ctx.fill();
+
+    // Blind Zone Hatching Lines
+    ctx.strokeStyle = 'rgba(239, 68, 68, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.70)';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('180° BLIND ZONE (REAR/FLANK)', -1.8 * PPM, 0);
+    ctx.restore();
+  }
+
+  // 2. Chassis Dimensions (robot_xstack.yaml footprint)
+  const fX = AMR.nose_x * PPM;
+  const tX = AMR.tail_x * PPM;
+  const bW = (AMR.nose_x - AMR.tail_x) * PPM;
+  const bH = AMR.half_w * 2 * PPM;
+
+  // Main Chassis (Industrial Robot Blue)
+  ctx.fillStyle = '#2563eb';
+  ctx.fillRect(tX, -AMR.half_w * PPM, bW, bH);
+  ctx.strokeStyle = '#60a5fa';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(tX, -AMR.half_w * PPM, bW, bH);
+
+  // Fork Stacker Carriage / Mast (Heavy Steel Gray)
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(-0.15 * PPM, -AMR.half_w * PPM + 2, 0.20 * PPM, bH - 4);
+
+  // Rear Forks (Safety Orange Tines projecting backward)
+  const forkLen = 0.45 * PPM;
+  const forkW = 0.09 * PPM;
+  const forkGap = 0.12 * PPM;
+
+  ctx.fillStyle = '#f59e0b';
+  ctx.strokeStyle = '#d97706';
+  ctx.lineWidth = 1;
+  // Left Fork
+  ctx.fillRect(tX - forkLen + 10, -forkGap - forkW, forkLen, forkW);
+  ctx.strokeRect(tX - forkLen + 10, -forkGap - forkW, forkLen, forkW);
+  // Right Fork
+  ctx.fillRect(tX - forkLen + 10, forkGap, forkLen, forkW);
+  ctx.strokeRect(tX - forkLen + 10, forkGap, forkLen, forkW);
+
+  // Drive Axle Center Marker (Origin / Rotation pivot)
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#0f172a';
+  ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI * 2); ctx.fill();
+
+  // 2D LiDAR Puck (Forward mounted at x = +0.33m)
+  const lx = AMR.lidar_x * PPM;
+  ctx.fillStyle = '#10b981'; // Green puck
+  ctx.beginPath(); ctx.arc(lx, 0, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#047857';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Heading pointer arrow
+  ctx.fillStyle = '#93c5fd';
+  ctx.beginPath();
+  ctx.moveTo(fX + 12, 0);
+  ctx.lineTo(fX + 2, -6);
+  ctx.lineTo(fX + 2, 6);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawLiDARSweep(rx, ry, yaw, maxRange = 4.2) {
+  const lx = rx + AMR.lidar_x * Math.cos(yaw);
+  const ly = ry + AMR.lidar_x * Math.sin(yaw);
+  const [clx, cly] = toCanvas(lx, ly);
+
+  const numRays = 41; // 181 downsampled for clean rendering
+  const minAngle = -Math.PI / 2;
+  const maxAngle = Math.PI / 2;
+
+  ctx.save();
+  for (let i = 0; i < numRays; i++) {
+    const relAngle = minAngle + (i / (numRays - 1)) * (maxAngle - minAngle);
+    const absAngle = yaw + relAngle;
+
+    let hitDist = maxRange;
+
+    // Raycast against Top Rack line
+    if (Math.sin(absAngle) > 0) {
+      const dTop = (AISLE.topRackY - ly) / Math.sin(absAngle);
+      if (dTop > 0 && dTop < hitDist) hitDist = dTop;
+    }
+    // Raycast against Bottom Rack line
+    if (Math.sin(absAngle) < 0) {
+      const dBot = (AISLE.bottomRackY - ly) / Math.sin(absAngle);
+      if (dBot > 0 && dBot < hitDist) hitDist = dBot;
+    }
+
+    const hitX = lx + hitDist * Math.cos(absAngle);
+    const hitY = ly + hitDist * Math.sin(absAngle);
+    const [chx, chy] = toCanvas(hitX, hitY);
+
+    // Laser Ray Line
+    ctx.strokeStyle = hitDist < maxRange ? 'rgba(34, 197, 94, 0.40)' : 'rgba(34, 197, 94, 0.12)';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(clx, cly);
+    ctx.lineTo(chx, chy);
+    ctx.stroke();
+
+    // Laser Hit Point
+    if (hitDist < maxRange) {
+      ctx.fillStyle = '#22c55e';
+      ctx.beginPath(); ctx.arc(chx, chy, 1.8, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+function drawDynamicObstacle(ox, oy, heading, isCart = true) {
+  const [cx, cy] = toCanvas(ox, oy);
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(-heading);
+
+  // Pallet Cart / Dynamic Tugger Body (Red)
+  ctx.fillStyle = '#dc2626';
+  ctx.fillRect(-0.35 * PPM, -0.22 * PPM, 0.70 * PPM, 0.44 * PPM);
+  ctx.strokeStyle = '#b91c1c';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(-0.35 * PPM, -0.22 * PPM, 0.70 * PPM, 0.44 * PPM);
+
+  // Yellow warning chevron
+  ctx.fillStyle = '#facc15';
+  ctx.fillRect(-0.15 * PPM, -0.18 * PPM, 0.30 * PPM, 0.36 * PPM);
+
+  // Strobe beacon light
+  const pulse = Math.sin(simTime * 12) > 0;
+  ctx.fillStyle = pulse ? '#fef08a' : '#ea580c';
+  ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill();
+
+  // Wheels
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(-0.25 * PPM, -0.25 * PPM, 0.12 * PPM, 4);
+  ctx.fillRect(0.15 * PPM, -0.25 * PPM, 0.12 * PPM, 4);
+  ctx.fillRect(-0.25 * PPM, 0.25 * PPM - 4, 0.12 * PPM, 4);
+  ctx.fillRect(0.15 * PPM, 0.25 * PPM - 4, 0.12 * PPM, 4);
+
+  // Velocity arrow
+  ctx.strokeStyle = '#ef4444';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0.55 * PPM, 0); ctx.stroke();
+  ctx.fillStyle = '#ef4444';
+  ctx.beginPath();
+  ctx.moveTo(0.62 * PPM, 0);
+  ctx.lineTo(0.50 * PPM, -4);
+  ctx.lineTo(0.50 * PPM, 4);
+  ctx.closePath(); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawGhostObstacleMarkers() {
+  for (const gc of ghostCells) {
+    const [cx, cy] = toCanvas(gc.x, gc.y);
+    const pulse = Math.sin(simTime * 6) * 0.2 + 0.8;
+
+    // Ghost glow ring
+    ctx.strokeStyle = `rgba(239, 68, 68, ${0.8 * pulse})`;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, 0.25 * PPM, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Ghost Emoji Icon
+    ctx.font = '16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('👻', cx, cy - 1);
+
+    // Label
+    ctx.fillStyle = '#ef4444';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText('GHOST CELL (LETHAL: 254)', cx, cy + 20);
+    ctx.fillText('No laser ray can clear', cx, cy + 30);
+  }
+}
+
+function drawBreadcrumbsPath() {
+  if (breadcrumbs.length < 2) return;
+  ctx.save();
+  ctx.strokeStyle = '#a855f7'; // Purple breadcrumbs
+  ctx.lineWidth = 2.5;
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  breadcrumbs.forEach((p, i) => {
+    const [cx, cy] = toCanvas(p.x, p.y);
+    if (i === 0) ctx.moveTo(cx, cy);
+    else ctx.lineTo(cx, cy);
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Breadcrumb point dots
+  breadcrumbs.forEach(p => {
+    const [cx, cy] = toCanvas(p.x, p.y);
+    ctx.fillStyle = '#c084fc';
+    ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.fill();
+  });
+  ctx.restore();
+}
+
+function drawTEBRejectedTrajectories(rx, ry, yaw) {
+  if (tebFailedTrajectories.length === 0) return;
+
+  ctx.save();
+  for (const traj of tebFailedTrajectories) {
+    ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    traj.forEach((pt, i) => {
+      const [cx, cy] = toCanvas(pt.x, pt.y);
+      if (i === 0) ctx.moveTo(cx, cy);
+      else ctx.lineTo(cx, cy);
+    });
+    ctx.stroke();
+
+    // Red X at trajectory collision point
+    const last = traj[traj.length - 1];
+    const [lx, ly] = toCanvas(last.x, last.y);
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(lx - 5, ly - 5); ctx.lineTo(lx + 5, ly + 5);
+    ctx.moveTo(lx + 5, ly - 5); ctx.lineTo(lx - 5, ly + 5);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// =============================================================================
+// SCENE RENDER LOGIC
+// =============================================================================
+
+function renderScene0(dt) {
+  // Scene 0: Normal Aisle Navigation
+  document.getElementById('hud-status-dot').style.background = '#22c55e';
+  document.getElementById('hud-status-text').textContent = 'STATUS: NORMAL AISLE TRANSIT';
+  document.getElementById('telemetry-v').textContent = '0.25 m/s';
+  document.getElementById('telemetry-cost').textContent = 'CLEAR (0)';
+
+  const rx = -2.0 + (simTime * 0.35) % 4.0;
+  const ry = 0.0;
+  const yaw = 0.0;
+
+  document.getElementById('telemetry-wall').textContent = `${(AISLE.topRackY - (ry + AMR.half_w)).toFixed(2)} m (Bay A)`;
+
+  drawCostmapInflationGrid(rx, ry, yaw);
+  drawLiDARSweep(rx, ry, yaw);
+  drawAMR(rx, ry, yaw, true);
+
+  // Goal Arrow ahead
+  const [gx, gy] = toCanvas(3.0, 0);
+  ctx.fillStyle = '#22c55e';
+  ctx.beginPath(); ctx.arc(gx, gy, 8, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('GOAL', gx, gy - 12);
+}
+
+function renderScene1(dt) {
+  // Scene 1: Side Push & Ghost Obstacle Formation (Downward momentum transfer into Bay B)
+  const loopT = simTime % 8.0;
+
+  let rx = -0.5, ry = 0.0, yaw = 0.0;
+  let ox = 2.4, oy = 0.90, oYaw = Math.PI * 0.85;
+
+  if (loopT < 2.5) {
+    // Phase 1: Approaching from Top-Right
+    document.getElementById('hud-status-dot').style.background = '#f59e0b';
+    document.getElementById('hud-status-text').textContent = 'WARNING: CROSSING OBSTACLE DETECTED FROM BAY A';
+    document.getElementById('telemetry-v').textContent = '0.25 m/s';
+    document.getElementById('telemetry-cost').textContent = 'FREE SPACE (0)';
+
+    const p = loopT / 2.5;
+    rx = -1.2 + p * 0.6;
+    ry = 0.0;
+    ox = 2.4 - p * 2.1;
+    oy = 0.90 - p * 0.45;
+    oYaw = Math.PI * 0.88;
+    ghostCells = [];
+  } else if (loopT < 4.5) {
+    // Phase 2: Side collision & physical downward push toward Pallet Rack Bay B
+    document.getElementById('hud-status-dot').style.background = '#ef4444';
+    document.getElementById('hud-status-text').textContent = 'IMPACT! PUSHED DOWNWARD AGAINST PALLET RACK BAY B';
+    document.getElementById('telemetry-v').textContent = '0.00 m/s (BLOCKED)';
+    document.getElementById('telemetry-cost').textContent = 'LETHAL CONTACT (254)';
+
+    const p = (loopT - 2.5) / 2.0;
+    rx = -0.6 + p * 0.08;
+    ry = 0.0 - p * 0.80; // AMR pushed DOWNWARD into Bay B rack!
+    yaw = -p * 0.06;     // Slight CW yaw from glancing blow
+
+    // Cart stays in direct physical contact at AMR's upper edge (NO clipping)
+    ox = 0.30 - p * 1.15;
+    oy = ry + AMR.half_w + 0.22 + 0.02; // Bounding boxes touch
+    oYaw = Math.PI * 0.94;
+
+    // Contact spark at the bumper contact point
+    const [ix, iy] = toCanvas(rx + 0.1, ry + AMR.half_w);
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = '22px sans-serif';
+    ctx.fillText('💥', ix - 10, iy + 6);
+
+    // Large Animated Force Vector Arrow (Showing the push direction!)
+    const [fx1, fy1] = toCanvas(ox, oy - 0.15);
+    const [fx2, fy2] = toCanvas(rx + 0.1, ry - 0.25);
+    ctx.save();
+    ctx.strokeStyle = '#facc15';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.moveTo(fx1, fy1); ctx.lineTo(fx2, fy2); ctx.stroke();
+    // Arrowhead
+    ctx.fillStyle = '#facc15';
+    ctx.beginPath();
+    ctx.moveTo(fx2, fy2);
+    ctx.lineTo(fx2 - 8, fy2 - 12);
+    ctx.lineTo(fx2 + 8, fy2 - 12);
+    ctx.closePath(); ctx.fill();
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText('F_push (DOWNWARD)', fx1 - 10, fy1 + 22);
+    ctx.restore();
+  } else {
+    // Phase 3: Obstacle rolls past into rear blind spot -> GHOST FORMS
+    document.getElementById('hud-status-dot').style.background = '#ef4444';
+    document.getElementById('hud-status-text').textContent = 'TRAPPED: OBSTACLE SLIPPED TO BLIND REAR';
+    document.getElementById('telemetry-v').textContent = '0.00 m/s';
+    document.getElementById('telemetry-cost').textContent = 'GHOST CELL (LETHAL: 254)';
+
+    rx = -0.52;
+    ry = -0.80; // Wedged against Bay B (clearance only 0.22m)
+    yaw = -0.06;
+
+    // Obstacle is now behind/beside the AMR in the blind zone
+    const p = (loopT - 4.5) / 3.5;
+    ox = -0.85 - p * 2.2;
+    oy = -0.32 + p * 0.06;
+    oYaw = Math.PI;
+
+    ghostCells = [{ x: -0.35, y: -0.45 }];
+  }
+
+  // Measure distance to the wall it was pushed against (Bay B at bottom)
+  const distBayB = Math.abs(AISLE.bottomRackY - (ry - AMR.half_w));
+  document.getElementById('telemetry-wall').textContent = `${distBayB.toFixed(2)} m (Bay B)`;
+
+  drawCostmapInflationGrid(rx, ry, yaw);
+  drawGhostObstacleMarkers();
+  drawLiDARSweep(rx, ry, yaw);
+  drawAMR(rx, ry, yaw, true);
+  drawDynamicObstacle(ox, oy, oYaw);
+}
+
+function renderScene2(dt) {
+  // Scene 2: Inflation Trap & TEB Oscillation (Pinned at Bay B)
+  document.getElementById('hud-status-dot').style.background = '#f59e0b';
+  document.getElementById('hud-status-text').textContent = 'TEB LOCAL PLANNER: ALL TRAJECTORIES IN COLLISION';
+  document.getElementById('telemetry-v').textContent = '±0.02 m/s (JITTER)';
+  document.getElementById('telemetry-cost').textContent = 'LETHAL OVERLAP (254)';
+
+  stallTimer += dt;
+  ghostCells = [{ x: -0.35, y: -0.45 }];
+
+  // Micro-oscillation jitter (±0.02m linear, ±0.03 rad angular)
+  const jitterX = Math.sin(simTime * 14) * 0.02;
+  const jitterYaw = Math.cos(simTime * 12) * 0.03;
+
+  const rx = -0.52 + jitterX;
+  const ry = -0.80; // Pinned tight against bottom rack Bay B
+  const yaw = -0.06 + jitterYaw;
+
+  const distBayB = Math.abs(AISLE.bottomRackY - (ry - AMR.half_w));
+  document.getElementById('telemetry-wall').textContent = `${distBayB.toFixed(2)} m (Bay B)`;
+
+  // Generate failed candidate trajectories hitting inflation/ghost
+  tebFailedTrajectories = [
+    // Attempt downward: hits Bay B rack inflation directly
+    [{ x: rx, y: ry }, { x: rx + 0.3, y: ry - 0.05 }, { x: rx + 0.6, y: ry - 0.12 }],
+    // Attempt straight forward: trapped in overlapping inflation
+    [{ x: rx, y: ry }, { x: rx + 0.4, y: ry }, { x: rx + 0.7, y: ry }],
+    // Attempt steer upward toward center: hits ghost lethal cell directly
+    [{ x: rx, y: ry }, { x: rx + 0.2, y: ry + 0.15 }, { x: rx + 0.4, y: ry + 0.25 }]
+  ];
+
+  drawCostmapInflationGrid(rx, ry, yaw);
+  drawGhostObstacleMarkers();
+  drawTEBRejectedTrajectories(rx, ry, yaw);
+  drawLiDARSweep(rx, ry, yaw);
+  drawAMR(rx, ry, yaw, true);
+
+  // Oscillation Warning Banner
+  const [cx, cy] = toCanvas(rx, ry + 0.65);
+  ctx.fillStyle = '#f59e0b';
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`OSCILLATION DETECTED: Stalled ${stallTimer.toFixed(1)}s / 60.0s`, cx, cy);
+}
+
+function renderScene3(dt) {
+  // Scene 3: Fix 1 - Costmap Auto-Clear on Stall (Steers up from Bay B)
+  const loopT = simTime % 7.0;
+
+  let rx = -0.52, ry = -0.80, yaw = -0.06;
+
+  if (loopT < 2.5) {
+    // Waiting for 3.0s watchdog
+    stallTimer = loopT;
+    ghostCells = [{ x: -0.35, y: -0.45 }];
+    document.getElementById('hud-status-dot').style.background = '#ef4444';
+    document.getElementById('hud-status-text').textContent = `WATCHDOG ARMING... (${stallTimer.toFixed(1)}s / 3.0s)`;
+    document.getElementById('telemetry-v').textContent = '0.00 m/s';
+    document.getElementById('telemetry-cost').textContent = 'GHOST CELL PRESENT';
+  } else if (loopT < 3.8) {
+    // Service call: /move_base/clear_costmaps executed!
+    ghostCells = []; // Wiped!
+    document.getElementById('hud-status-dot').style.background = '#10b981';
+    document.getElementById('hud-status-text').textContent = 'SERVICE: /move_base/clear_costmaps() EXECUTED!';
+    document.getElementById('telemetry-v').textContent = '0.05 m/s (REPLAN)';
+    document.getElementById('telemetry-cost').textContent = 'CLEARED -> RE-MARKING';
+
+    // Flash ring effect
+    const [fx, fy] = toCanvas(rx, ry);
+    ctx.save();
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(fx, fy, (loopT - 2.5) * 60, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  } else {
+    // TEB finds clear path and drives safely upward away from Bay B
+    const p = (loopT - 3.8) / 3.2;
+    rx = -0.52 + p * 2.4;
+    ry = -0.80 + p * 0.80; // Steers upward away from Bay B back to aisle center!
+    yaw = 0.12 * (1 - p);
+    ghostCells = [];
+
+    document.getElementById('hud-status-dot').style.background = '#10b981';
+    document.getElementById('hud-status-text').textContent = 'STATUS: RECOVERY SUCCESSFUL — RESUMING TRANSIT';
+    document.getElementById('telemetry-v').textContent = '0.25 m/s';
+    document.getElementById('telemetry-cost').textContent = 'CLEAR (0)';
+
+    // Valid green trajectory curving away from Bay B
+    ctx.save();
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 3;
+    const [sx, sy] = toCanvas(rx, ry);
+    const [ex, ey] = toCanvas(rx + 1.5, 0);
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo(sx + 40, sy - 20, ex, ey); ctx.stroke();
+    ctx.restore();
+  }
+
+  const distBayB = Math.abs(AISLE.bottomRackY - (ry - AMR.half_w));
+  document.getElementById('telemetry-wall').textContent = `${distBayB.toFixed(2)} m (Bay B)`;
+
+  drawCostmapInflationGrid(rx, ry, yaw);
+  drawGhostObstacleMarkers();
+  drawLiDARSweep(rx, ry, yaw);
+  drawAMR(rx, ry, yaw, false);
+}
+
+function renderScene4(dt) {
+  // Scene 4: Fix 2 - Breadcrumb Safe Reverse Nudge (Escaping Bay B)
+  const loopT = simTime % 8.0;
+
+  // Recorded wake trail before collision (coming from centerline toward Bay B)
+  breadcrumbs = [
+    { x: -1.8, y: -0.10 },
+    { x: -1.4, y: -0.30 },
+    { x: -1.0, y: -0.55 },
+    { x: -0.52, y: -0.80 }
+  ];
+
+  let rx = -0.52, ry = -0.80, yaw = -0.06;
+
+  if (loopT < 2.0) {
+    // Wedged in wall inflation
+    document.getElementById('hud-status-dot').style.background = '#f59e0b';
+    document.getElementById('hud-status-text').textContent = 'STUCK IN RACK INFLATION: INITIATING SAFE REVERSE';
+    document.getElementById('telemetry-v').textContent = '0.00 m/s';
+    document.getElementById('telemetry-cost').textContent = 'INFLATION CONTACT';
+    rx = -0.52; ry = -0.80;
+  } else if (loopT < 5.0) {
+    // Reversing along breadcrumbs at 0.05 m/s (ISO 3691-4 wake trail away from Bay B)
+    const p = (loopT - 2.0) / 3.0;
+    rx = -0.52 - p * 0.35; // Backwards 25cm
+    ry = -0.80 + p * 0.25; // Pulling upward away from Bay B!
+    yaw = -0.06 + p * 0.06;
+
+    document.getElementById('hud-status-dot').style.background = '#a855f7';
+    document.getElementById('hud-status-text').textContent = `SAFE REVERSE: ${(p * 0.25).toFixed(2)}m @ 0.05 m/s`;
+    document.getElementById('telemetry-v').textContent = '-0.05 m/s (SAFE)';
+    document.getElementById('telemetry-cost').textContent = 'DECREASING COST';
+
+    // Reverse direction indicator
+    const [cx, cy] = toCanvas(rx - 0.2, ry + 0.1);
+    ctx.fillStyle = '#a855f7';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('◄ REVERSING ALONG WAKE', cx - 20, cy + 20);
+  } else {
+    // From new safe clearance pose, TEB replans
+    const p = (loopT - 5.0) / 3.0;
+    rx = -0.87 + p * 2.2;
+    ry = -0.55 + p * 0.55; // Heading back down centerline
+    yaw = 0.08 * (1 - p);
+
+    document.getElementById('hud-status-dot').style.background = '#10b981';
+    document.getElementById('hud-status-text').textContent = 'ESCAPED WALL INFLATION: RE-ROUTING CLEAR';
+    document.getElementById('telemetry-v').textContent = '0.25 m/s';
+    document.getElementById('telemetry-cost').textContent = 'CLEAR (0)';
+  }
+
+  const distBayB = Math.abs(AISLE.bottomRackY - (ry - AMR.half_w));
+  document.getElementById('telemetry-wall').textContent = `${distBayB.toFixed(2)} m (Bay B)`;
+
+  drawCostmapInflationGrid(rx, ry, yaw);
+  drawBreadcrumbsPath();
+  drawLiDARSweep(rx, ry, yaw);
+  drawAMR(rx, ry, yaw, false);
+}
+
+// =============================================================================
+// MAIN ANIMATION LOOP
+// =============================================================================
+
+function mainLoop() {
+  const dt = (1 / 60) * simSpeed;
+  if (isPlaying) simTime += dt;
+
+  drawWarehouseEnvironment();
+
+  switch (currentScene) {
+    case 0: renderScene0(dt); break;
+    case 1: renderScene1(dt); break;
+    case 2: renderScene2(dt); break;
+    case 3: renderScene3(dt); break;
+    case 4: renderScene4(dt); break;
+  }
+
+  animReq = requestAnimationFrame(mainLoop);
+}
+
+// Initialize
+switchScene(0);
+mainLoop();
+</script>
+</body>
+</html>
