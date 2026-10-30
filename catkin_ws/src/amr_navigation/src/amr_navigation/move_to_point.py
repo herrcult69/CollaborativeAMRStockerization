@@ -49,6 +49,7 @@ class MoveToPointController:
         self.pos_tolerance = float(rospy.get_param("~pos_tolerance", 0.05))     # 5 cm precision
         yaw_tol_deg = float(rospy.get_param("~yaw_tolerance", rospy.get_param("~yaw_tolerance_deg", 4.0)))
         self.yaw_tolerance = math.radians(yaw_tol_deg)  # 4.0 degrees default (clean fork docking)
+        self.default_yaw_tolerance = self.yaw_tolerance
 
         # Kinematic and speed limits (Gentle warehouse speeds, tuned for Unity PhysX friction)
         self.heading_align_threshold = math.radians(12.0)  # ~12 deg to start driving
@@ -70,13 +71,15 @@ class MoveToPointController:
         self.sub = rospy.Subscriber("/odom", Odometry, self.on_odom, queue_size=1)
         rospy.on_shutdown(self.stop)
 
-    def set_goal(self, gx, gy, goal_yaw=None, pos_tolerance=None):
-        """Configure target for navigation."""
+    def set_goal(self, gx, gy, goal_yaw=None, pos_tolerance=None, yaw_tolerance=None):
+        """Configure target for navigation. yaw_tolerance (deg) applies to this goal only."""
         self.gx = float(gx)
         self.gy = float(gy)
         self.goal_yaw = deg_to_rad(goal_yaw) if goal_yaw is not None else None
         if pos_tolerance is not None:
             self.pos_tolerance = float(pos_tolerance)
+        self.yaw_tolerance = (math.radians(float(yaw_tolerance)) if yaw_tolerance is not None
+                              else self.default_yaw_tolerance)
         self.state = self.STATE_ALIGN_TO_GOAL
 
     def on_odom(self, msg):
@@ -167,9 +170,9 @@ class MoveToPointController:
         active_err = final_yaw_error if self.state == self.STATE_ALIGN_FINAL_YAW else heading_error
         return linear, angular, dist_to_goal, active_err, final_yaw_error
 
-    def navigate_to(self, gx, gy, goal_yaw=None, pos_tolerance=None, label="Target"):
+    def navigate_to(self, gx, gy, goal_yaw=None, pos_tolerance=None, label="Target", yaw_tolerance=None):
         """Blocking call to execute 3-phase navigation to a target."""
-        self.set_goal(gx, gy, goal_yaw, pos_tolerance)
+        self.set_goal(gx, gy, goal_yaw, pos_tolerance, yaw_tolerance)
         rate = rospy.Rate(20)
 
         yaw_str = f"{goal_yaw:.1f} deg" if goal_yaw is not None else "Transit"

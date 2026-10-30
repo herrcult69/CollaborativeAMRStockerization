@@ -95,13 +95,13 @@ Detailed arguments, physical parameter tolerances, and copy-paste CLI examples a
 | **Milestone 1 Mission** | `roslaunch amr_navigation milestone1.launch` | Full 11-step autonomous replenishment: rack staging $\to$ entry $\to$ lift $\to$ corridor $\to$ station deposit $\to$ extraction. |
 | **Milestone 2 Mission** | `roslaunch amr_navigation milestone2.launch` | Hybrid mission: `move_base` DWA planner drives long corridors, precision controllers execute docking. |
 | **Rack Docking Test** | `roslaunch amr_navigation test_dock_reverse.launch` | 5-phase rack reverse docking, uniform $20\text{ mm}$ lift, and extraction test (`pick_level:=bottom\|top\|shelf`). |
-| **Station Deposit Test** | `roslaunch amr_navigation test_undock_reverse.launch` | 6-phase test approaching the $25\text{ cm}$ staging station at $(13.12, 0.0)$, depositing, and undocking. |
+| **Station Deposit Test** | `roslaunch amr_navigation test_undock_reverse.launch` | 6-phase test approaching the $25\text{ cm}$ staging station (`station_2`, centre $(13.44, 0.0)$), depositing, and undocking. |
 | **Waypoint Navigation** | `roslaunch amr_navigation move_to_point.launch` | 3-phase state machine driving chassis to any $(x, y, \text{yaw})$ with anti-stiction dither pulses. |
 | **Raw Reverse Docking** | `roslaunch amr_navigation docking.launch` | Standalone straight reverse insertion with active heading lock and stiction clamp ($\ge 0.07\text{ m/s}$). |
 | **Localization Stack** | `roslaunch amr_navigation warehouse_localization.launch` | Standalone `map_server` + AMCL with automated initial pose matching the Unity spawn point. |
 
 > [!TIP]
-> **Opposite-Side Shelves ($180^\circ$ across the aisle)**: The reverse docking algorithm is completely direction-agnostic. To pick from shelves on the South side of the aisle (facing North), simply pass `dock_yaw:=90.0` (e.g. `roslaunch amr_navigation test_dock_reverse.launch dock_yaw:=90.0 pallet_y:=-5.0`).
+> **Opposite-Side Shelves ($180^\circ$ across the aisle)**: The reverse docking algorithm is completely direction-agnostic. To pick from shelves on the South side of the aisle (facing North), pick a package on that side; its dock heading (90°) comes from the locations file (e.g. `roslaunch amr_navigation test_dock_reverse.launch package:=package_101`). Locations are exported from Unity with **Tools > Export ROS Locations** into `config/locations_<scene>.yaml`.
 
 ---
 
@@ -134,7 +134,7 @@ python3 -m unittest discover -s /catkin_ws/src/amr_navigation/tests -p "test_*.p
 * **`test_move_to_point.py`**: State machine transitions (`ALIGN_TO_GOAL` $\to$ `DRIVE_TO_GOAL` $\to$ `ALIGN_FINAL_YAW`), angle normalization ($[-\pi, \pi]$), and drift recovery.
 * **`test_docking.py`**: Stop pose calculations with lever arm offsets ($d_{\text{fork}} = 0.22\text{ m}$), minimum creep velocity clamps ($\ge 0.07\text{ m/s}$), and cardinal direction stability ($0^\circ, 90^\circ, 180^\circ, 270^\circ$).
 * **`test_robot_profiles.py`**: Validates launch file parameter contracts, frame consistency (`drive_center`), footprint matrices, and map loading for both `xstack` and `legacy` profiles.
-* **`test_unification_params.py`**: Validates unified parameter defaults across launch files (`station_x: 13.12`, `lift_speed: 0.08`, `rack_standoff: 1.2`, `standoff: 0.8`).
+* **`test_unification_params.py`**: Validates unified parameter defaults across launch files (`station: station_2`, `pallet_dock_offset: 0.342`, `lift_speed: 0.08`, `rack_standoff: 1.2`, `standoff: 0.8`).
 
 ### Topic Introspection
 ```bash
@@ -152,6 +152,7 @@ rostopic echo /lift_cmd    # Inspect commanded mast elevation height
 | :--- | :--- |
 | **[`docs/XSTACK_ROBOT_GUIDE.md`](docs/XSTACK_ROBOT_GUIDE.md)** | **Primary Robot Reference**: Kinematics, `drive_center` frame contract, collision envelope, PhysX verification data, and profile switching. |
 | **[`docs/SCRIPTS_AND_NODES.md`](docs/SCRIPTS_AND_NODES.md)** | **Complete Software Reference**: Detailed architectural breakdown of every Python library, ROS node, mission coordinator, and launch file. |
+| **[`docs/pallet_detection.md`](docs/pallet_detection.md)** | **Pallet Detection & Docking**: Named locations (Unity export), laser load-face detection, reverse line-following, entry gate, stall guard, and how to run a mission by package name. |
 | **[`docs/WAREHOUSE_METRICS_AND_CLEARANCE.md`](docs/WAREHOUSE_METRICS_AND_CLEARANCE.md)** | **Physical Clearances & Kinematics**: Warehouse dimensions, pallet geometries, and standardized Option 1 uniform $20\text{ mm}$ lift table. |
 | **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** | High-level system architecture, loopback networking, and design rationale. |
 | **[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)** | Diagnostic steps for Docker networking, VcXsrv display setup, and common errors. |

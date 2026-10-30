@@ -3,23 +3,27 @@
 Milestone 1 Mission Coordinator: Autonomous Pallet Replenishment Workflow.
 
 Full End-to-End Pick-and-Place Mission Pipeline:
-  1. Approach rack pre-dock staging pose at (pallet_x, ~3.98) facing 270 deg
+  1. Approach rack pre-dock staging pose rack_standoff in front of the dock stop, facing the dock heading
   2. Lower lift mast to ground entry height (-0.02m)
-  3. Precision straight-line reverse docking into pallet cavity at (pallet_x, pallet_y)
+  3. Precision straight-line reverse docking until drive_center is pallet_dock_offset in front of the pallet centre
   4. Elevate lift mast to safe under-rack height (+0.015m, 17mm headroom below 0.592m beam)
   5. Pull straight forward out of rack (rack extraction / undock)
   6. Elevate lift mast to transit height (0.28m, 40mm clearance above 25cm staging station)
-  7. Follow Manhattan orthogonal corridor: (4.0, 5.0) -> (4.0, 0.0) -> (12.10, 0.0), align 180 deg
-  8. Precision reverse docking over the 25cm staging station to stop pose (12.90, 0.0)
+  7. Follow Manhattan orthogonal corridor: rack -> (corridor_x, corridor_y) -> station staging pose
+  8. Precision reverse docking over the 25cm staging station to stop pose (station_dock_offset in front of it)
   9. Lower mast to deposit height (0.21m) - pallet settles on station deck, forks float free
   10. Pull straight forward to staging standoff (12.10, 0.0), cleanly extracting forks
   11. Lower mast to idle/transit height (0.00m) - Mission Complete!
+
+Package and station are named entries of config/locations_*.yaml (object centres). This mission runs on
+/odom only, so it assumes odom = map (robot started at the spawn the locations were exported from).
 """
 import math
 import rospy
 from amr_navigation.move_to_point import MoveToPointController
 from amr_navigation.docking import PalletDockingController, compute_dock_target_pose
 from amr_navigation.lift import LiftController
+from amr_navigation.locations import FLOOR_MAX_HEIGHT, find_location
 
 
 def run_mission():
@@ -28,21 +32,24 @@ def run_mission():
     # Workflow mode: set true if AMR already has the pallet loaded
     skip_pickup = bool(rospy.get_param("~skip_pickup", False))
 
-    # Rack pickup parameters
-    pallet_x = float(rospy.get_param("~pallet_x", 4.0))
-    pallet_y = float(rospy.get_param("~pallet_y", 5.0))
-    dock_yaw = float(rospy.get_param("~dock_yaw", 270.0))  # degrees
-    fork_offset = float(rospy.get_param("~fork_offset", 0.22))  # deep tine penetration (85-90%)
+    # Named object centres from config/locations_*.yaml (loaded into ~packages / ~stations by the launch file)
+    package = str(rospy.get_param("~package", "package_5"))
+    station = str(rospy.get_param("~station", "station_2"))
+    pallet_x, pallet_y, dock_yaw, pallet_h = find_location(rospy.get_param("~packages", {}), package)
+    station_x, station_y, station_yaw, _ = find_location(rospy.get_param("~stations", {}), station)
+    # drive_center stops this far in front of the object centre when docked (see compute_dock_target_pose)
+    pallet_dock_offset = float(rospy.get_param("~pallet_dock_offset", 0.342))  # forks ~85-90% into the pocket
+    station_dock_offset = float(rospy.get_param("~station_dock_offset", 0.54))  # pallet centred over the deck
+    # Touching the station this close to the stop counts as docked (stall guard in dock_reverse)
+    station_contact_tol = float(rospy.get_param("~station_contact_tol", 0.10))
+
     rack_standoff = float(rospy.get_param("~rack_standoff", 1.2))  # Standoff in front of rack dock pose
 
     # Transit & Highway Waypoints (Orthogonal routing strictly avoids diagonal blockage)
     corridor_x = float(rospy.get_param("~corridor_x", 4.0))
     corridor_y = float(rospy.get_param("~corridor_y", 0.0))
 
-    # Staging Station / Stocker Target (Located at X=13.12, Y=0.0, 25cm tall)
-    station_x = float(rospy.get_param("~station_x", 13.12))
-    station_y = float(rospy.get_param("~station_y", 0.0))
-    station_yaw = float(rospy.get_param("~station_yaw", 180.0))  # Facing West, rear pointing East into dock
+    # Staging Station / Stocker (25cm tall Workbench)
     station_standoff = float(rospy.get_param("~station_standoff", rospy.get_param("~standoff", 0.8)))  # Standoff in front of drive_stop pose
     standoff = station_standoff  # Alias for backward compatibility
 
@@ -84,23 +91,29 @@ def run_mission():
         TRANSIT_LIFT_HEIGHT = float(raw_transit)
     DEPOSIT_LIFT_HEIGHT = float(rospy.get_param("~deposit_lift_height", 0.21))
 
+    # The bottom lift profile only fits floor pallets
+    if not skip_pickup and pick_level not in ("top", "upper", "2", "shelf", "3") and pallet_h > FLOOR_MAX_HEIGHT:
+        rospy.logerr("%s sits on an upper rack level (%.2f m); pick_level bottom picks floor pallets only.",
+                     package, pallet_h)
+        return
+
     # 1. Calculate Rack Pickup Poses:
     target_rack_x, target_rack_y = compute_dock_target_pose(
         pallet_x=pallet_x,
         pallet_y=pallet_y,
         dock_yaw_deg=dock_yaw,
-        fork_offset=fork_offset
+        dock_offset=pallet_dock_offset
     )
     stage_rack_x = target_rack_x + rack_standoff * math.cos(math.radians(dock_yaw))
     stage_rack_y = target_rack_y + rack_standoff * math.sin(math.radians(dock_yaw))
 
     # 2. Calculate Staging Station Deposit Poses:
-    # Stop pose: drive_center stops at station_x + fork_offset * cos(yaw) = 13.12 - 0.22 = 12.90m
+    # Stop pose: drive_center stops at station_x + station_dock_offset * cos(yaw) = 13.44 - 0.54 = 12.90m
     target_deposit_x, target_deposit_y = compute_dock_target_pose(
         pallet_x=station_x,
         pallet_y=station_y,
         dock_yaw_deg=station_yaw,
-        fork_offset=fork_offset
+        dock_offset=station_dock_offset
     )
 
     # Pre-dock staging pose: standoff distance in front of stop pose along heading
@@ -119,10 +132,10 @@ def run_mission():
     rospy.loginfo("==================================================")
     rospy.loginfo("STARTING MILESTONE 1 FULL AUTONOMOUS MISSION")
     rospy.loginfo("Mode                     : %s", "Skip Pickup (start with pallet)" if skip_pickup else "Full Pick-and-Deliver")
-    rospy.loginfo("Target Rack Pallet       : (%.2f, %.2f) | Dock Yaw: %.1f deg", pallet_x, pallet_y, dock_yaw)
+    rospy.loginfo("Target Rack Pallet       : %s (%.2f, %.2f) | Dock Yaw: %.1f deg", package, pallet_x, pallet_y, dock_yaw)
     rospy.loginfo("Pickup Level Profile     : %s (Entry=%.3fm, Pick=%.3fm)", pick_level, ENTRY_LIFT_HEIGHT, PICK_LIFT_HEIGHT)
     rospy.loginfo("Corridor Junction        : (%.2f, %.2f)", corridor_x, corridor_y)
-    rospy.loginfo("Staging Station Target   : (%.2f, %.2f) [25cm Tall Dock]", station_x, station_y)
+    rospy.loginfo("Staging Station Target   : %s (%.2f, %.2f) [25cm Tall Dock]", station, station_x, station_y)
     rospy.loginfo("Station Stop Pose (Drive): (%.2f, %.2f)", target_deposit_x, target_deposit_y)
     rospy.loginfo("Pre-Dock Staging Pose    : (%.2f, %.2f) | Yaw: %.1f deg", stage_station_x, stage_station_y, station_yaw)
     rospy.loginfo("Lift Profiles            : Transit=%.3fm | Deposit=%.3fm", TRANSIT_LIFT_HEIGHT, DEPOSIT_LIFT_HEIGHT)
@@ -219,6 +232,7 @@ def run_mission():
         dock_yaw=station_yaw,
         speed=dock_speed,
         pos_tolerance=0.04,
+        contact_tol=station_contact_tol,
         label="Station Reverse Docking"
     )
     if not ok or rospy.is_shutdown():
@@ -261,8 +275,7 @@ def run_mission():
 
     rospy.loginfo("\n==================================================")
     rospy.loginfo("SUCCESS: MILESTONE 1 FULL MISSION COMPLETE!")
-    rospy.loginfo("Pallet successfully picked from rack (%.2f, %.2f) and deposited on station (%.2f, %.2f).",
-                  pallet_x, pallet_y, station_x, station_y)
+    rospy.loginfo("%s successfully picked from the rack and deposited on %s.", package, station)
     rospy.loginfo("AMR retreated to aisle at (%.2f, %.2f) with forks clear.", retreat_x, stage_station_y)
     rospy.loginfo("==================================================")
 

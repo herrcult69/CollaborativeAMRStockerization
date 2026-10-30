@@ -17,8 +17,10 @@ if os.path.isdir(_pkg_src) and _pkg_src not in sys.path:
 
 import roslaunch
 import rospkg
+import yaml
 from amr_navigation.lift import LiftController
 from amr_navigation.docking import compute_dock_target_pose
+from amr_navigation.locations import find_location
 
 
 class ParameterUnificationTests(unittest.TestCase):
@@ -52,18 +54,20 @@ class ParameterUnificationTests(unittest.TestCase):
         ctrl = LiftController(default_speed=0.08)
         self.assertEqual(ctrl.default_speed, 0.12)
 
-    def test_station_docking_and_standoff_geometry_13_12(self):
-        station_x = 13.12
-        station_y = 0.0
-        station_yaw = 180.0
-        fork_offset = 0.22
+    def locations(self):
+        return yaml.safe_load((self.nav / "config" / "locations_milestone_3.yaml").read_text())
+
+    def test_station_docking_and_standoff_geometry(self):
+        # station_2 Workbench centre (13.44, 0.0); the drive_center stop stays at the tuned 12.90
+        station_x, station_y, station_yaw, _ = find_location(self.locations()["stations"], "station_2")
+        station_dock_offset = 0.54
         station_standoff = 0.8
 
         target_x, target_y = compute_dock_target_pose(
             pallet_x=station_x,
             pallet_y=station_y,
             dock_yaw_deg=station_yaw,
-            fork_offset=fork_offset,
+            dock_offset=station_dock_offset,
         )
         self.assertAlmostEqual(target_x, 12.90, places=2)
         self.assertAlmostEqual(target_y, 0.0, places=2)
@@ -74,17 +78,17 @@ class ParameterUnificationTests(unittest.TestCase):
         self.assertAlmostEqual(stage_y, 0.0, places=2)
 
     def test_rack_standoff_geometry(self):
-        pallet_x = 4.0
-        pallet_y = 5.0
-        dock_yaw = 270.0
-        fork_offset = 0.22
+        # package_5 pallet centre (4.003, 5.122) on the floor; the drive_center stop stays at the tuned 4.78
+        pallet_x, pallet_y, dock_yaw, height = find_location(self.locations()["packages"], "package_5")
+        self.assertLess(height, 0.10)
+        pallet_dock_offset = 0.342
         rack_standoff = 1.2
 
         target_x, target_y = compute_dock_target_pose(
             pallet_x=pallet_x,
             pallet_y=pallet_y,
             dock_yaw_deg=dock_yaw,
-            fork_offset=fork_offset,
+            dock_offset=pallet_dock_offset,
         )
         self.assertAlmostEqual(target_x, 4.0, places=2)
         self.assertAlmostEqual(target_y, 4.78, places=2)
@@ -100,7 +104,9 @@ class ParameterUnificationTests(unittest.TestCase):
             str(self.nav / "launch" / "milestone1.launch"), config, argv=[], verbose=False
         )
         params = {k: p.value for k, p in config.params.items()}
-        self.assertAlmostEqual(float(params["/milestone1_mission/station_x"]), 13.12, places=2)
+        self.assertEqual(params["/milestone1_mission/station"], "station_2")
+        self.assertAlmostEqual(float(params["/milestone1_mission/stations/station_2/x"]), 13.44, places=2)
+        self.assertAlmostEqual(float(params["/milestone1_mission/station_dock_offset"]), 0.54, places=2)
         self.assertAlmostEqual(float(params["/milestone1_mission/lift_speed"]), 0.08, places=2)
         self.assertAlmostEqual(float(params["/milestone1_mission/standoff"]), 0.8, places=2)
         self.assertAlmostEqual(float(params["/milestone1_mission/rack_standoff"]), 1.2, places=2)
@@ -112,6 +118,8 @@ class ParameterUnificationTests(unittest.TestCase):
             str(self.nav / "launch" / "test_dock_reverse.launch"), config, argv=[], verbose=False
         )
         params = {k: p.value for k, p in config.params.items()}
+        self.assertEqual(params["/test_dock_reverse/package"], "package_5")
+        self.assertAlmostEqual(float(params["/test_dock_reverse/pallet_dock_offset"]), 0.342, places=3)
         self.assertAlmostEqual(float(params["/test_dock_reverse/standoff"]), 1.2, places=2)
         self.assertAlmostEqual(float(params["/test_dock_reverse/transit_speed"]), 0.45, places=2)
         self.assertAlmostEqual(float(params["/test_dock_reverse/lift_speed"]), 0.08, places=2)
@@ -122,7 +130,8 @@ class ParameterUnificationTests(unittest.TestCase):
             str(self.nav / "launch" / "test_undock_reverse.launch"), config, argv=[], verbose=False
         )
         params = {k: p.value for k, p in config.params.items()}
-        self.assertAlmostEqual(float(params["/test_undock_reverse/station_x"]), 13.12, places=2)
+        self.assertEqual(params["/test_undock_reverse/station"], "station_2")
+        self.assertAlmostEqual(float(params["/test_undock_reverse/stations/station_2/x"]), 13.44, places=2)
         self.assertAlmostEqual(float(params["/test_undock_reverse/lift_speed"]), 0.08, places=2)
 
     def test_milestone2_launch_contract(self):
@@ -131,7 +140,8 @@ class ParameterUnificationTests(unittest.TestCase):
             str(self.nav / "launch" / "milestone2.launch"), config, argv=[], verbose=False
         )
         params = {k: p.value for k, p in config.params.items()}
-        self.assertAlmostEqual(float(params["/milestone2_mission/station_x"]), 13.12, places=2)
+        self.assertEqual(params["/milestone2_mission/package"], "package_5")
+        self.assertAlmostEqual(float(params["/milestone2_mission/packages/package_5/y"]), 5.122, places=3)
         self.assertAlmostEqual(float(params["/milestone2_mission/lift_speed"]), 0.08, places=2)
         self.assertAlmostEqual(float(params["/milestone2_mission/rack_standoff"]), 1.2, places=2)
         self.assertAlmostEqual(float(params["/milestone2_mission/standoff"]), 0.8, places=2)
@@ -144,6 +154,12 @@ class ParameterUnificationTests(unittest.TestCase):
         params = {k: p.value for k, p in config.params.items()}
         self.assertAlmostEqual(float(params["/docking_node/dock_speed"]), 0.12, places=2)
         self.assertAlmostEqual(float(params["/docking_node/dock_tolerance"]), 0.04, places=2)
+
+    def test_find_location_rejects_unknown_names(self):
+        with self.assertRaises(KeyError):
+            find_location(self.locations()["packages"], "package_999")
+        with self.assertRaises(KeyError):
+            find_location({}, "package_5")  # locations_file not loaded
 
 
 if __name__ == "__main__":

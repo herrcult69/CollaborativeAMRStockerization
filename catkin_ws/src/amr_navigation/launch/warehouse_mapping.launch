@@ -17,6 +17,13 @@
     <!-- Sensor range_max is 10 m; keep no-return rays beyond usable hit range. -->
     <param name="maxRange" value="10.01" />
     <param name="maxUrange" value="9.8" />
+    <!-- Odometry noise model (gmapping defaults 0.1 / 0.2 / 0.1 / 0.2). Unity odom is ground truth, so
+         trust it: with the defaults scan matching rotated milestone_1_01 and milestone_3_01 by ~1.3 deg.
+         SIM ONLY - restore the defaults for a real robot with encoder odometry. -->
+    <param name="srr" value="0.01" />
+    <param name="srt" value="0.02" />
+    <param name="str" value="0.01" />
+    <param name="stt" value="0.02" />
     <param name="xmin" value="-20.0" />
     <param name="ymin" value="-20.0" />
     <param name="xmax" value="20.0" />
