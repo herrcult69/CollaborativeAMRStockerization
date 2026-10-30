@@ -28,8 +28,6 @@
     <!-- NavFn redraw the route 1/ sec -->
     <param name="planner_frequency" value="1.0" /> 
     
-    <param name="planner_patience" value="5.0" />
-    <param name="controller_patience" value="5.0" />
     <param name="oscillation_timeout" value="$(arg oscillation_timeout)" />
     <param name="oscillation_distance" value="0.10" />
     <param name="shutdown_costmaps" value="false" />
@@ -39,5 +37,8 @@
     <!-- <remap from="cmd_vel" to="/cmd_vel"/> -->
     <remap from="cmd_vel" to="/cmd_vel_nav"/>
   </node>
-  <node pkg="amr_navigation" type="velocity_gate.py" name="velocity_gate" output="screen" />
+  <!-- Clearing-only scan for the costmaps (laser_clearing source in costmap_common.yaml): removes the trails
+       dynamic obstacles leave between lidar rays and in the blind rear arc. -->
+  <node pkg="amr_navigation" type="scan_clearing.py" name="scan_clearing" output="screen" />
+  <node pkg="amr_navigation" type="velocity_gate.py" name="velocity_gate" output="screen"/>
 </launch>
