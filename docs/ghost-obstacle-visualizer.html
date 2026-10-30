@@ -51,7 +51,7 @@
   </div>
 
   <!-- Scene Navigation Pills -->
-  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mb-4">
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
     <button onclick="switchScene(0)" id="pill-0" class="scene-pill active text-xs p-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-left cursor-pointer flex flex-col gap-0.5">
       <span class="font-bold flex items-center gap-1"><span>1️⃣</span> Normal Navigation</span>
       <span class="text-[11px] opacity-75 truncate">180° LiDAR in narrow aisle</span>
@@ -71,6 +71,10 @@
     <button onclick="switchScene(4)" id="pill-4" class="scene-pill text-xs p-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-left cursor-pointer flex flex-col gap-0.5">
       <span class="font-bold flex items-center gap-1 text-purple-400"><span>🔙</span> Fix 2: Safe Reverse</span>
       <span class="text-[11px] opacity-75 truncate">Breadcrumb wake escape</span>
+    </button>
+    <button onclick="switchScene(5)" id="pill-5" class="scene-pill text-xs p-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-left cursor-pointer flex flex-col gap-0.5">
+      <span class="font-bold flex items-center gap-1 text-cyan-400"><span>🔄</span> TEB 180° Turn Trap</span>
+      <span class="text-[11px] opacity-75 truncate">Forward loop vs in-place spin</span>
     </button>
   </div>
 
@@ -333,6 +337,35 @@ const SCENE_DETAILS = [
         <p class="text-xs">
           This backwards nudge pulls the chassis upward and back away from Bay B, detaching from the rack inflation zone and allowing TEB to steer cleanly back to the aisle center.
         </p>
+      </div>
+    `
+  },
+
+  // Scene 5: TEB 180° Turn Trap
+  {
+    badge: "RELATED ISSUE: 180° TURN TRAP",
+    badgeColor: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
+    title: "TEB 180° Turnaround & Elastic Band Buckling",
+    content: `
+      <div class="space-y-3 text-xs sm:text-sm leading-relaxed">
+        <p>
+          When the global route requires reversing direction down an aisle ($180^\\circ$ turnaround), TEB often freezes and refuses to turn.
+        </p>
+        <div class="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs space-y-1.5">
+          <div class="font-bold text-red-400">❌ Default Config Failure:</div>
+          <p>
+            With <code class="text-slate-300">weight_kinematics_forward_drive: 100</code>, TEB heavily penalizes in-place rotation. Instead of spinning on the spot, it attempts a <strong>giant forward loop</strong> (red arc) that collides with the rack walls!
+          </p>
+        </div>
+        <div class="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs space-y-1.5">
+          <div class="font-bold text-emerald-400">✅ Clean Diff-Drive Fix:</div>
+          <p>
+            1. Lower <code class="text-slate-300">weight_kinematics_forward_drive</code> to <strong>1.0</strong>.<br>
+            2. Enable <code class="text-slate-300">global_plan_overwrite_orientation: true</code>.<br>
+            3. Lower <code class="text-slate-300">min_obstacle_dist</code> from 0.35m to <strong>0.15m</strong>.<br>
+            The differential AMR now performs a pure in-place pivot within its footprint circle ($\Delta x = 0$) and drives straight forward toward the goal!
+          </p>
+        </div>
       </div>
     `
   }
@@ -1102,6 +1135,130 @@ function renderScene4(dt) {
   drawAMR(rx, ry, yaw, false);
 }
 
+function renderScene5(dt) {
+  // Scene 5: TEB 180° Turnaround & Elastic Band Buckling
+  const loopT = simTime % 8.0;
+
+  // Goal marker behind the robot (at West x = -2.6, y = 0)
+  const [gx, gy] = toCanvas(-2.6, 0);
+  ctx.save();
+  ctx.fillStyle = '#f59e0b';
+  ctx.beginPath(); ctx.arc(gx, gy, 8, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('GOAL (180° BEHIND)', gx, gy - 12);
+  ctx.restore();
+
+  if (loopT < 4.0) {
+    // Mode A: Default TEB with weight_kinematics_forward_drive = 100
+    document.getElementById('hud-status-dot').style.background = '#ef4444';
+    document.getElementById('hud-status-text').textContent = 'DEFAULT TEB: FORWARD U-TURN ARC STRIKES RACK!';
+    document.getElementById('telemetry-v').textContent = '0.00 m/s (FROZEN)';
+    document.getElementById('telemetry-cost').textContent = 'BAND BUCKLED (COLLISION)';
+
+    // Robot is facing East (yaw = 0), trying and failing to turn
+    const jitterX = Math.sin(simTime * 14) * 0.015;
+    const rx = 0.2 + jitterX;
+    const ry = 0.0;
+    const yaw = 0.0;
+
+    document.getElementById('telemetry-wall').textContent = '1.02 m (Bay A)';
+
+    // Draw the giant failed forward U-turn loop that TEB attempts
+    ctx.save();
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([6, 4]);
+    const [sx, sy] = toCanvas(rx, ry);
+    const [c1x, c1y] = toCanvas(rx + 1.2, 0.4);
+    const [c2x, c2y] = toCanvas(rx + 0.8, 1.25); // Hits Top Rack Bay A!
+    const [ex, ey] = toCanvas(rx - 1.2, 0.8);
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.bezierCurveTo(c1x, c1y, c2x, c2y, ex, ey);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Collision marker 💥 at the top rack impact point
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = '22px sans-serif';
+    ctx.fillText('💥', c2x - 10, c2y + 8);
+
+    // Explanatory label
+    ctx.fillStyle = '#ef4444';
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Giant forward U-turn arc hits Bay A wall!', c2x, c2y + 26);
+    ctx.fillText('(Caused by weight_kinematics_forward_drive: 100)', c2x, c2y + 38);
+    ctx.restore();
+
+    drawCostmapInflationGrid(rx, ry, yaw);
+    drawLiDARSweep(rx, ry, yaw);
+    drawAMR(rx, ry, yaw, true);
+  } else {
+    // Mode B: Tuned TEB (weight = 1.0) with clean in-place diff-drive turn
+    const pSub = loopT - 4.0;
+
+    if (pSub < 2.0) {
+      // Phase B1: Pure in-place rotation on the drive axle (Δx = 0)
+      const p = pSub / 2.0;
+      const rx = 0.2;
+      const ry = 0.0;
+      const yaw = p * Math.PI; // Rotates smoothly 0 to 180 degrees!
+
+      document.getElementById('hud-status-dot').style.background = '#06b6d4';
+      document.getElementById('hud-status-text').textContent = `IN-PLACE ROTATION: ${(yaw * 180 / Math.PI).toFixed(0)}° (Δx = 0)`;
+      document.getElementById('telemetry-v').textContent = '0.00 m/s (ω = 0.45 rad/s)';
+      document.getElementById('telemetry-cost').textContent = 'SAFE IN-PLACE PIVOT';
+      document.getElementById('telemetry-wall').textContent = '1.02 m (Bay A)';
+
+      // Draw the safe tail-sweep envelope circle
+      const [cx, cy] = toCanvas(rx, ry);
+      ctx.save();
+      ctx.strokeStyle = '#06b6d4';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.arc(cx, cy, 0.59 * PPM, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = '#06b6d4';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('Tail Sweep (R = 0.59m) Stays Within Aisle', cx, cy - 0.59 * PPM - 6);
+      ctx.restore();
+
+      drawCostmapInflationGrid(rx, ry, yaw);
+      drawLiDARSweep(rx, ry, yaw);
+      drawAMR(rx, ry, yaw, true);
+    } else {
+      // Phase B2: Facing goal! Drives straight forward towards goal
+      const p = (pSub - 2.0) / 2.0;
+      const rx = 0.2 - p * 2.5;
+      const ry = 0.0;
+      const yaw = Math.PI; // Facing West towards goal
+
+      document.getElementById('hud-status-dot').style.background = '#10b981';
+      document.getElementById('hud-status-text').textContent = 'ALIGNED: DRIVING CLEANLY TOWARD GOAL';
+      document.getElementById('telemetry-v').textContent = '0.25 m/s (FORWARD)';
+      document.getElementById('telemetry-cost').textContent = 'CLEAN CORRIDOR';
+      document.getElementById('telemetry-wall').textContent = '1.02 m (Bay A)';
+
+      // Clean green forward trajectory
+      ctx.save();
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 3;
+      const [sx, sy] = toCanvas(rx, ry);
+      const [gx, gy] = toCanvas(-2.6, 0);
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(gx, gy); ctx.stroke();
+      ctx.restore();
+
+      drawCostmapInflationGrid(rx, ry, yaw);
+      drawLiDARSweep(rx, ry, yaw);
+      drawAMR(rx, ry, yaw, false);
+    }
+  }
+}
+
 // =============================================================================
 // MAIN ANIMATION LOOP
 // =============================================================================
@@ -1118,6 +1275,7 @@ function mainLoop() {
     case 2: renderScene2(dt); break;
     case 3: renderScene3(dt); break;
     case 4: renderScene4(dt); break;
+    case 5: renderScene5(dt); break;
   }
 
   animReq = requestAnimationFrame(mainLoop);

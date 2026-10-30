@@ -121,3 +121,96 @@ The mission must be aborted manually. This failure mode prevents autonomous ware
 2. **Supervisor Node:**
    - Standalone node watching `/odom` and `/move_base/status`.
    - Dispatches `/move_base/clear_costmaps` and breadcrumb reverse commands safely.
+
+---
+
+# 🎫 RELATED ISSUE: TEB $180^\circ$ Turnaround Deadlock & Elastic Band Buckling
+
+**Priority:** 🟠 High  
+**Component:** `amr_navigation` — `teb_local_planner` kinematic trajectory optimization  
+**Symptoms:** Robot completely refuses to turn around when the global plan or goal is behind the robot ($180^\circ$ reversal). Robot freezes or jitters back and forth without executing the turn.
+
+---
+
+## 1. Problem Description
+
+When the navigation goal requires traveling in the reverse direction down an aisle, `NavfnROS` generates a global plan doubling back behind the robot. In open space, a differential-drive robot should simply rotate on the spot $\approx 180^\circ$ and drive forward.
+
+However, **TEB refuses to rotate and completely freezes**.
+
+```
+[WHAT A DIFF-DRIVE ROBOT SHOULD DO]
+Current Pose (Facing North):  ▲
+                              │
+Step 1: Rotate in place 180°: ↻ (Pure in-place spin, Δx = 0)
+                              │
+Step 2: Drive forward South:  ▼ (Clean forward drive down aisle)
+
+══════════════════════════════════════════════════════════════════════════════
+
+[WHAT TEB ACTUALLY ATTEMPTS TO DO (With weight_kinematics_forward_drive: 100)]
+
+                     COLLISION WITH WALL!
+                       ╭───────💥──────╮
+                       │               │  TEB tries to carve a giant
+                       ▲               │  4-meter forward U-turn loop!
+                Current Pose           ▼
+                                   Goal South
+
+  Result: Forward loop penetrates rack inflation -> TEB rejects trajectory
+          Optimizer deadlocks between forward-drive weight and obstacle cost!
+```
+
+---
+
+## 2. Root Cause Breakdown
+
+### A. The Extreme `weight_kinematics_forward_drive: 100` Penalty
+In [`teb_warehouse.yaml`](file:///p:/AntiGravity/FinalYear/Project_Project/CollaborativeAMRStockerization/catkin_ws/src/amr_navigation/config/teb_warehouse.yaml#L20):
+```yaml
+weight_kinematics_forward_drive: 100   # strongly prefer driving forward
+```
+* Setting this weight to **100** places an overwhelming penalty on in-place rotation and reverse maneuvers.
+* TEB treats the differential-drive AMR like an automobile with no steering lock: it tries to create a **continuous forward teardrop loop** to turn around.
+* In a $2.5\,\text{m}$ warehouse aisle, this forward loop instantly strikes the rack walls. The obstacle repulsion forces the band backward, while the forward weight forces it forward $\rightarrow$ **the optimizer fails to converge and outputs zero velocity**.
+
+### B. Oversized `min_obstacle_dist: 0.35`
+* The robot's rear forks already extend to $x = -0.54\,\text{m}$.
+* Tail sweep radius during an in-place turn:
+  $$R_{\text{tail}} = \sqrt{(-0.54)^2 + (\pm 0.23)^2} \approx \mathbf{0.59\,\text{m}}$$
+* Adding `min_obstacle_dist: 0.35` on top of the polygon requires:
+  $$\text{Required Turn Clearance} = 0.59\,\text{m} + 0.35\,\text{m} \approx \mathbf{0.94\,\text{m}}$$
+* When inflation halos ($0.50\,\text{m}$ each) are present on adjacent walls, the aisle does not have $0.94\,\text{m}$ of margin on both sides simultaneously.
+
+### C. Global Plan Orientation Inversion
+* When `Navfn` draws a path behind the robot, the initial path poses have orientations opposite to the robot's current heading.
+* Without `global_plan_overwrite_orientation: true`, TEB attempts to interpolate between conflicting orientation vectors, creating topological knots in the elastic band.
+
+---
+
+## 3. Concrete Solution (No RL Needed)
+
+### Fix A: Tune `teb_warehouse.yaml`
+```yaml
+# 1. Lower forward drive weight from 100 to allow in-place rotation
+weight_kinematics_forward_drive: 1.0
+
+# 2. Right-size obstacle distance (polygon footprint is already accurate)
+min_obstacle_dist: 0.15
+inflation_dist: 0.35
+
+# 3. Allow clean diff-drive in-place spin at path start
+global_plan_overwrite_orientation: true
+global_plan_prune_distance: 0.8
+min_in_place_vel_theta: 0.15
+
+# 4. Allow slight backing during multi-point turns if wedged
+max_vel_x_backwards: 0.08
+```
+
+### Fix B: Staged Heading Alignment (The Milestone 2 Pattern)
+If heading error to the global path is large ($|\Delta \theta| > 45^\circ$):
+1. **Phase 1:** Apply pure in-place rotation at $\omega = 0.35\,\text{rad/s}$ until $|\Delta \theta| \le 30^\circ$.
+2. **Phase 2:** Hand over to TEB once the robot is facing the corridor direction.
+TEB will never see an inverted $180^\circ$ elastic band, completely eliminating the turn-around freeze.
+
