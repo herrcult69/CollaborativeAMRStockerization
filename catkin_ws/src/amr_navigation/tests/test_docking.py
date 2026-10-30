@@ -13,7 +13,7 @@ if os.path.isdir(_pkg_src) and _pkg_src not in sys.path:
     sys.path.insert(0, _pkg_src)
 
 from amr_navigation.move_to_point import normalize_angle, deg_to_rad
-from amr_navigation.docking import PalletDockingController, compute_dock_target_pose, compute_dock_base_pose, reverse_line_command, compute_prestage_pose
+from amr_navigation.docking import PalletDockingController, compute_dock_target_pose, compute_dock_base_pose, reverse_line_command, compute_prestage_pose, map_pose_to_odom, ProgressWatch
 
 
 class PalletDockingTests(unittest.TestCase):
@@ -25,29 +25,29 @@ class PalletDockingTests(unittest.TestCase):
     def test_compute_dock_target_pose_270_deg(self):
         # Pallet cavity at (4.0, 5.0), docking yaw 270 deg (facing south)
         # Forks are 0.35m behind drive_center (in rear -X direction)
-        dx, dy = compute_dock_target_pose(pallet_x=4.0, pallet_y=5.0, dock_yaw_deg=270.0, fork_offset=0.35)
+        dx, dy = compute_dock_target_pose(pallet_x=4.0, pallet_y=5.0, dock_yaw_deg=270.0, dock_offset=0.35)
         # cos(270) = 0, sin(270) = -1 -> drive_y = 5.0 - 0.35 = 4.65
         self.assertAlmostEqual(dx, 4.0, places=4)
         self.assertAlmostEqual(dy, 4.65, places=4)
 
         # Backward compatibility alias test
-        bx, by = compute_dock_base_pose(pallet_x=4.0, pallet_y=5.0, dock_yaw_deg=270.0, fork_offset=0.35)
+        bx, by = compute_dock_base_pose(pallet_x=4.0, pallet_y=5.0, dock_yaw_deg=270.0, dock_offset=0.35)
         self.assertAlmostEqual(bx, 4.0, places=4)
         self.assertAlmostEqual(by, 4.65, places=4)
 
     def test_compute_dock_target_pose_cardinal_directions(self):
         # Facing 0 deg (East, +X), backing into pallet at (5.0, 4.0)
-        dx_0, dy_0 = compute_dock_target_pose(pallet_x=5.0, pallet_y=4.0, dock_yaw_deg=0.0, fork_offset=0.35)
+        dx_0, dy_0 = compute_dock_target_pose(pallet_x=5.0, pallet_y=4.0, dock_yaw_deg=0.0, dock_offset=0.35)
         self.assertAlmostEqual(dx_0, 5.35, places=4)
         self.assertAlmostEqual(dy_0, 4.0, places=4)
 
         # Facing 180 deg (West, -X), backing into pallet at (3.0, 4.0)
-        dx_180, dy_180 = compute_dock_target_pose(pallet_x=3.0, pallet_y=4.0, dock_yaw_deg=180.0, fork_offset=0.35)
+        dx_180, dy_180 = compute_dock_target_pose(pallet_x=3.0, pallet_y=4.0, dock_yaw_deg=180.0, dock_offset=0.35)
         self.assertAlmostEqual(dx_180, 2.65, places=4)
         self.assertAlmostEqual(dy_180, 4.0, places=4)
 
         # Facing 90 deg (North, +Y), backing into pallet at (4.0, 3.0)
-        dx_90, dy_90 = compute_dock_target_pose(pallet_x=4.0, pallet_y=3.0, dock_yaw_deg=90.0, fork_offset=0.35)
+        dx_90, dy_90 = compute_dock_target_pose(pallet_x=4.0, pallet_y=3.0, dock_yaw_deg=90.0, dock_offset=0.35)
         self.assertAlmostEqual(dx_90, 4.0, places=4)
         self.assertAlmostEqual(dy_90, 3.35, places=4)
 
@@ -102,6 +102,19 @@ class PalletDockingTests(unittest.TestCase):
             self.assertLess(abs(tip_lat_gate), 0.008)
             self.assertLess(abs(e_lat), 0.005)
 
+    def test_map_pose_to_odom(self):
+        # Spawn at the map origin: identity snapshot leaves the target unchanged
+        x, y, yaw = map_pose_to_odom(4.0, 4.78, 270.0, 0.0, 0.0, 0.0)
+        self.assertAlmostEqual(x, 4.0, places=6)
+        self.assertAlmostEqual(y, 4.78, places=6)
+        self.assertAlmostEqual(yaw, 270.0, places=6)
+        # Spawn at map (2.0, 1.0) facing 90 deg -> odom<-map = translation (-1.0, 2.0), rotation -90 deg.
+        # Rack dock (4.00, 4.78, 270) is 3.78 m ahead and 2.00 m right of the spawn, facing backward.
+        x, y, yaw = map_pose_to_odom(4.0, 4.78, 270.0, -1.0, 2.0, math.radians(-90.0))
+        self.assertAlmostEqual(x, 3.78, places=6)
+        self.assertAlmostEqual(y, -2.00, places=6)
+        self.assertAlmostEqual(normalize_angle(math.radians(yaw)), normalize_angle(math.radians(180.0)), places=6)
+
     def test_prestage_faces_stage(self):
         # Rack stage (4.00, 3.58) docking at 270 deg -> pre-stage below it, nose up toward the rack
         x, y, yaw = compute_prestage_pose(4.0, 3.58, 270.0, approach=0.6)
@@ -139,7 +152,7 @@ class PalletDockingTests(unittest.TestCase):
         self.assertAlmostEqual(z_pocket_ceiling - z_fork_top, 0.030, places=3)  # 30mm gap to ceiling
 
         # Station Dock at (13.0, 0.0), facing 180 deg
-        tx, ty = compute_dock_target_pose(pallet_x=13.0, pallet_y=0.0, dock_yaw_deg=180.0, fork_offset=0.22)
+        tx, ty = compute_dock_target_pose(pallet_x=13.0, pallet_y=0.0, dock_yaw_deg=180.0, dock_offset=0.22)
         self.assertAlmostEqual(tx, 12.78, places=2)
         self.assertAlmostEqual(ty, 0.0, places=2)
 
@@ -148,6 +161,21 @@ class PalletDockingTests(unittest.TestCase):
         self.assertAlmostEqual(stage_x, 11.98, places=2)
         # Front bumper at standoff: 11.98 + 0.33 = 12.31m (< 13.0m dock, ~0.7m clearance!)
         self.assertLess(stage_x + 0.33, 13.0)
+
+    def test_progress_watch_flags_stall_only_without_progress(self):
+        w = ProgressWatch(timeout=1.5, step=0.005)
+        w.reset(0.0)
+        # Creeping at 0.07 m/s, sampled at 20 Hz: never stalled
+        for k in range(60):
+            self.assertFalse(w.stalled(0.50 - 0.0035 * k, 0.05 * k))
+        # Blocked at 0.29 m remaining (sub-step jitter only): stalled once 1.5 s pass without 5 mm progress
+        t0 = 0.05 * 60
+        self.assertFalse(w.stalled(0.290, t0))
+        self.assertFalse(w.stalled(0.288, t0 + 1.4))
+        self.assertTrue(w.stalled(0.289, t0 + 1.6))
+        # After a retry pull-out the watch restarts
+        w.reset(t0 + 2.0)
+        self.assertFalse(w.stalled(0.9, t0 + 2.1))
 
 
 if __name__ == "__main__":

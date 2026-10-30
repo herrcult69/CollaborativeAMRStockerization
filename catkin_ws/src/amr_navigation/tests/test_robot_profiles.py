@@ -51,7 +51,7 @@ class RobotProfileTests(unittest.TestCase):
             self.load("warehouse_navigation.launch", "typo")
 
     def test_localization_selects_measured_map_and_allows_override(self):
-        for profile, filename in [("xstack", "milestone_1_01.yaml"), ("legacy", "warehouse_training_01.yaml")]:
+        for profile, filename in [("xstack", "milestone_3_02.yaml"), ("legacy", "warehouse_training_01.yaml")]:
             config = self.load("warehouse_localization.launch", profile)
             server = next(n for n in config.nodes if n.type == "map_server")
             self.assertIn(filename, server.args)
@@ -69,7 +69,8 @@ class RobotProfileTests(unittest.TestCase):
 
         config_m = self.load("warehouse_autonav.launch", "xstack", extra=("launch_mission:=true",))
         self.assertEqual(config_m.params["/milestone2_mission/rack_standoff"].value, 1.2)
-        self.assertEqual(config_m.params["/milestone2_mission/station_x"].value, 13.12)
+        self.assertEqual(config_m.params["/milestone2_mission/station"].value, "station_2")
+        self.assertEqual(config_m.params["/milestone2_mission/stations/station_2/x"].value, 13.44)
 
     def test_standalone_description_profiles_resolve(self):
         for profile, name in [("xstack", "xstack_amr"), ("legacy", "reverse_stacker_amr")]:

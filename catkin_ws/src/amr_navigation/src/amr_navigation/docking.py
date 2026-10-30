@@ -14,29 +14,28 @@ from nav_msgs.msg import Odometry
 from amr_navigation.move_to_point import normalize_angle, deg_to_rad
 
 
-def compute_dock_target_pose(pallet_x, pallet_y, dock_yaw_deg, fork_offset=0.22):
+def compute_dock_target_pose(pallet_x, pallet_y, dock_yaw_deg, dock_offset):
     """
-    Computes the required drive_center coordinate so that the fork tines reach (pallet_x, pallet_y).
-    Forks are mounted on the robot's rear (-X axis).
-    /odom tracks the differential-drive fulcrum (drive_center, X = -0.10m from base_link).
+    drive_center stop pose for docking at an object (pallet or station) centred at (pallet_x, pallet_y).
+    Forks are mounted on the robot's rear (-X axis); /odom tracks drive_center (X = -0.10 m from base_link).
+    The robot reverses in along dock_yaw_deg and stops dock_offset in front of the object centre:
 
-    fork_offset controls tine penetration depth:
-      - 0.35m → fork tine midpoint over cavity (~50% insertion, old default)
-      - 0.22m → fork heel near cavity entry (~85-90% insertion, current default)
+        target_x = pallet_x + dock_offset * cos(yaw)
+        target_y = pallet_y + dock_offset * sin(yaw)
 
-    Formula:
-        target_x = pallet_x + fork_offset * cos(yaw)
-        target_y = pallet_y + fork_offset * sin(yaw)
+    dock_offset (Milestone_3, measured on odom ground truth):
+      - pallet_dock_offset  0.342 m: forks ~85-90% into the StandardPallet pocket
+      - station_dock_offset 0.54 m : pallet centred over the Workbench deck
 
-    :param pallet_x: Target pallet pocket / cavity center X (meters)
-    :param pallet_y: Target pallet pocket / cavity center Y (meters)
+    :param pallet_x: Object centre X (meters), e.g. a package or station from config/locations_*.yaml
+    :param pallet_y: Object centre Y (meters)
     :param dock_yaw_deg: Robot orientation during reverse docking in degrees (e.g. 270.0)
-    :param fork_offset: Distance from drive_center to fork heel reference point in meters (default: 0.22m)
+    :param dock_offset: Distance from the object centre to drive_center when docked (meters)
     :return: (target_drive_x, target_drive_y)
     """
     yaw_rad = deg_to_rad(dock_yaw_deg)
-    tx = float(pallet_x) + float(fork_offset) * math.cos(yaw_rad)
-    ty = float(pallet_y) + float(fork_offset) * math.sin(yaw_rad)
+    tx = float(pallet_x) + float(dock_offset) * math.cos(yaw_rad)
+    ty = float(pallet_y) + float(dock_offset) * math.sin(yaw_rad)
     return tx, ty
 
 
@@ -54,6 +53,16 @@ def compute_prestage_pose(stage_x, stage_y, dock_yaw_deg, approach=0.6):
     return (float(stage_x) + approach * math.cos(yaw_rad),
             float(stage_y) + approach * math.sin(yaw_rad),
             (float(dock_yaw_deg) + 180.0) % 360.0)
+
+
+def map_pose_to_odom(x, y, yaw_deg, dx, dy, dth):
+    """
+    Express a map-frame pose in odom using a frozen odom<-map transform
+    (translation dx, dy and rotation dth in radians, as returned by lookup_transform("odom", "map")).
+    :return: (x, y, yaw_deg) in odom
+    """
+    c, s = math.cos(dth), math.sin(dth)
+    return dx + c * x - s * y, dy + s * x + c * y, float(yaw_deg) + math.degrees(dth)
 
 
 def reverse_line_command(x, y, yaw, tx, ty, line_yaw, v_max, k_lat=2.5, max_tilt=math.radians(10.0)):
@@ -78,6 +87,27 @@ def reverse_line_command(x, y, yaw, tx, ty, line_yaw, v_max, k_lat=2.5, max_tilt
     # Tight clamp so the robot cannot swing the forks sideways
     w = max(-0.18, min(0.18, 1.6 * (yaw_des - e_yaw)))
     return v, w, along, e_lat, e_yaw
+
+
+class ProgressWatch:
+    """
+    Stall detector for a docking approach: stalled once the remaining distance has not dropped by
+    `step` (m) for `timeout` (s), e.g. the robot is pushing against the station or a pallet block.
+    """
+
+    def __init__(self, timeout=1.5, step=0.005):
+        self.timeout = float(timeout)
+        self.step = float(step)
+        self.reset(0.0)
+
+    def reset(self, now):
+        self.best = float("inf")
+        self.since = float(now)
+
+    def stalled(self, remaining, now):
+        if remaining < self.best - self.step:
+            self.best, self.since = remaining, float(now)
+        return now - self.since > self.timeout
 
 
 class PalletDockingController:
@@ -124,7 +154,8 @@ class PalletDockingController:
         self.pub.publish(cmd)
 
     def dock_reverse(self, target_x, target_y, dock_yaw=None, speed=None, pos_tolerance=None, label="Pallet Insertion", fork_offset=0.0,
-                     entry_lat_tol=None, entry_along=0.50, fork_tip=0.54, retries=2):
+                     entry_lat_tol=None, entry_along=0.50, fork_tip=0.54, retries=2, contact_tol=None,
+                     stall_timeout=1.5):
         """
         Reverse into the pallet pocket towards (target_x, target_y), steering drive_center onto
         the pallet axis (dock_yaw through the target) and forbidding in-place spinning.
@@ -138,10 +169,15 @@ class PalletDockingController:
         :param fork_offset: Lever arm offset in meters from drive_center to fork center along rear -X axis (default: 0.0)
         :param entry_lat_tol: If set, lateral limit (m) for drive_center and fork tips when the tips reach the
                               pocket, and for the final pose; a miss pulls forward and retries. None disables.
-        :param entry_along: Remaining travel (m) at which the fork tips reach the pocket face.
-                            Milestone_1 pallet: 0.54 tip + 0.175 half depth - 0.22 fork_offset ~= 0.50.
+        :param entry_along: Remaining travel (m) at which the entry check runs, just before the tips reach the
+                            pocket. StandardPallet: the tips touch it at 0.54 tip + 0.175 half depth
+                            - 0.342 pallet_dock_offset = 0.37 m remaining, so 0.50 checks ~13 cm before contact.
         :param fork_tip: Distance (m) from drive_center back to the fork tips.
         :param retries: Pull-out-and-retry attempts after a failed entry check.
+        :param contact_tol: If set, a stall (no progress for stall_timeout) with at most this much travel left
+                            counts as docked: the robot touched the end stop, e.g. the station deck, so the
+                            mission can lower the pallet. Any other stall stops and fails instead of pushing on.
+        :param stall_timeout: Seconds (sim time) without 5 mm of progress before the approach counts as stalled.
         """
         tx = float(target_x)
         ty = float(target_y)
@@ -181,6 +217,8 @@ class PalletDockingController:
         start_x, start_y = sample[0], sample[1]
         entry_checked = False
         attempts = 0
+        watch = ProgressWatch(stall_timeout)
+        watch.reset(rospy.get_time())
 
         while not rospy.is_shutdown():
             with self.lock:
@@ -204,16 +242,27 @@ class PalletDockingController:
             dist_to_dock = math.hypot(tx - x, ty - y)
             v_cmd, w_cmd, along, e_lat, e_yaw = reverse_line_command(x, y, yaw, tx, ty, locked_yaw_rad, v_max)
 
-            # Arrived within tolerance, or reached the target depth along the pallet axis
-            if dist_to_dock <= tol or along <= 0.0:
+            # Stall guard: reversing but not getting closer, so something is in the way
+            stalled = watch.stalled(along, rospy.get_time())
+            contact = stalled and contact_tol is not None and along <= contact_tol
+            if stalled and not contact:
+                self.stop()
+                rospy.logerr(">>> PALLET DOCK FAILED (stalled): %s at (%.3f, %.3f), %.3fm short, no progress for %.1fs",
+                             label, x, y, along, stall_timeout)
+                return False
+
+            # Arrived within tolerance, reached the target depth along the pallet axis, or touched the end stop
+            if dist_to_dock <= tol or along <= 0.0 or contact:
                 for _ in range(6):
                     self.stop()
                     time.sleep(0.04)
                 ok = entry_lat_tol is None or abs(e_lat) <= entry_lat_tol
+                status = "COMPLETE" if ok else "FAILED (lateral offset)"
+                if contact:
+                    status += " (contact, %.3fm short)" % along
                 log = rospy.loginfo if ok else rospy.logerr
                 log(">>> PALLET DOCK %s: %s at (%.3f, %.3f), Yaw: %.2f deg (Dist: %.3fm | Lateral: %+.1fmm | YawErr: %+.2f deg)",
-                    "COMPLETE" if ok else "FAILED (lateral offset)", label, x, y, math.degrees(yaw),
-                    dist_to_dock, e_lat * 1000.0, math.degrees(e_yaw))
+                    status, label, x, y, math.degrees(yaw), dist_to_dock, e_lat * 1000.0, math.degrees(e_yaw))
                 return ok
 
             # Entry gate: fork tips are about to reach the pallet pocket
@@ -234,6 +283,7 @@ class PalletDockingController:
                     # Pull forward to where this approach started, then reverse again
                     if not self.undock(start_x, start_y, dock_yaw=math.degrees(locked_yaw_rad), label=label + " Retry Pull-out"):
                         return False
+                    watch.reset(rospy.get_time())
                     continue
 
             cmd = Twist()
