@@ -1,5 +1,5 @@
 # teb_warehouse.yaml (starting point)
-max_vel_x: 0.25
+max_vel_x: 0.35
 max_vel_x_backwards: 0.05      # must be > 0; discourage reversing since the lidar faces forward
 max_vel_theta: 0.45
 acc_lim_x: 0.5
