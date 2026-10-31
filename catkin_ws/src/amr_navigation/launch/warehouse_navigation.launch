@@ -8,6 +8,11 @@
        Allow slow heading alignment: pi / 0.08 rad/s is about 39 seconds.
        This is still a finite timeout, not a remedy for actual left/right wobble. -->
   <arg name="oscillation_timeout" default="60.0" />
+  <!-- velocity_gate holds the robot completely still while yielding. move_base sees no progress during that
+       time, so every move_base timeout must outlast the gate's hold: gate_hold_timeout < oscillation_timeout and
+       < controller/planner patience. After the hold the gate stops holding (TEB may rotate/reroute). -->
+  <arg name="gate_hold_timeout" default="20.0" />
+  <arg name="nav_patience" default="30.0" doc="controller_patience and planner_patience; keep > gate_hold_timeout" />
   <node pkg="move_base" type="move_base" name="move_base" output="screen">
     <rosparam command="load" file="$(find amr_navigation)/config/costmap_common.yaml" ns="global_costmap" />
     <rosparam command="load" file="$(find amr_navigation)/config/robot_$(arg robot_profile).yaml" ns="global_costmap" />
@@ -28,6 +33,8 @@
     <!-- NavFn redraw the route 1/ sec -->
     <param name="planner_frequency" value="1.0" /> 
     
+    <param name="planner_patience" value="$(arg nav_patience)" />
+    <param name="controller_patience" value="$(arg nav_patience)" />
     <param name="oscillation_timeout" value="$(arg oscillation_timeout)" />
     <param name="oscillation_distance" value="0.10" />
     <param name="shutdown_costmaps" value="false" />
@@ -40,5 +47,7 @@
   <!-- Clearing-only scan for the costmaps (laser_clearing source in costmap_common.yaml): removes the trails
        dynamic obstacles leave between lidar rays and in the blind rear arc. -->
   <node pkg="amr_navigation" type="scan_clearing.py" name="scan_clearing" output="screen" />
-  <node pkg="amr_navigation" type="velocity_gate.py" name="velocity_gate" output="screen"/>
+  <node pkg="amr_navigation" type="velocity_gate.py" name="velocity_gate" output="screen">
+    <param name="hold_timeout" value="$(arg gate_hold_timeout)" />
+  </node>
 </launch>
