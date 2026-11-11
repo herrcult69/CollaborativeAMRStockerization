@@ -20,9 +20,18 @@ DEFAULTS = dict(
     tail_x=0.54,              # Footprint rear edge behind drive_center (m)
     half_w=0.33,              # Half corridor width: half robot (0.23m) + side margin (0.10m)
     d_stop=0.35,              # Protective stop shield depth ahead of nose (m)
+    d_hold_static=0.50,       # Distance ahead to trigger in-line HOLD for stationary obstacle (m)
     d_slow=1.50,              # Warning zone slowdown depth ahead of nose (m)
     yield_dist=1.50,          # Distance ahead to trigger head-on yield (m)
     closing_rate_thr=-0.15,   # Obstacle world-velocity threshold toward robot (m/s)
+    flank_x_min=-0.20,        # Rear boundary along chassis for side flank protection (m)
+    flank_w=0.35,             # Lateral boundary from centerline for flank protection (m)
+    cross_y_max=2.20,         # Outer lateral monitoring window for crossing traffic (m) - 220 deg FOV
+    cross_rate_thr=-0.15,     # Lateral inward velocity threshold to trigger crossing yield (m/s)
+    cross_rate_max=-2.50,     # Max plausible physical speed (rejects multi-object jumps) (m/s)
+    cross_x_min=-0.10,        # Longitudinal bounds of intersection crossing zone (m)
+    cross_x_max=1.80,         # Longitudinal bounds of intersection crossing zone (m)
+    cross_clear_w=1.00,       # Lateral corridor must clear to this width before unlocking crossing (m)
     seg_gap=0.20,             # Max distance between adjacent rays in same obstacle cluster (m)
     min_cluster_pts=3,        # Min rays to confirm obstacle (noise rejection)
     closing_window=0.50,      # Sliding time window for rate estimation (s)
@@ -69,6 +78,14 @@ class GateLogic:
         self.clear_since = None
         self.closing_rate = 0.0
         self.gap_hist = []
+        self.flank_breach = False
+        self.flank_obs = None
+        self.cross_hold = None
+        self.cross_rate = 0.0
+        self.lat_hist = []
+        self.lat_obs = None
+        self.intersection_occupied = False
+        self.trigger_info = ""
 
     def _cluster_points(self, points):
         """Groups points in scan order into clusters separated by > seg_gap."""
@@ -120,7 +137,7 @@ class GateLogic:
                     break
         self.closing_rate = obs_v
 
-        # Head-on oncoming vehicle detection
+        # 1. Head-on oncoming vehicle detection
         if gap <= p["yield_dist"] and obs_v <= p["closing_rate_thr"]:
             self.dyn_hold = "moving"
             self.dyn_gap = gap
@@ -128,13 +145,69 @@ class GateLogic:
             self.dyn_hold = None
             self.dyn_gap = float("inf")
 
+        # 2. Flank Protection Shield (detects objects along the side chassis using 220-270 deg FOV)
+        flank_breach = False
+        flank_obs = None
+        for cluster in clusters:
+            for px, py in cluster:
+                if p["flank_x_min"] <= px <= p["nose_x"] and 0.23 < abs(py) <= p["flank_w"]:
+                    flank_breach = True
+                    flank_obs = (px, py)
+                    break
+            if flank_breach:
+                break
+        self.flank_breach = flank_breach
+        self.flank_obs = flank_obs
+
+        # 3. Lateral Crossing Anticipation (detects crossing traffic entering intersection)
+        min_lat = float("inf")
+        lat_obs = None
+        for cluster in clusters:
+            for px, py in cluster:
+                if p["cross_x_min"] <= px <= p["cross_x_max"] and p["half_w"] < abs(py) <= p["cross_y_max"]:
+                    if abs(py) < min_lat:
+                        min_lat = abs(py)
+                        lat_obs = (px, py)
+
+        self.lat_obs = lat_obs
+        self.lat_hist.append((now, min_lat))
+        self.lat_hist = [h for h in self.lat_hist if now - h[0] <= p["closing_window"]]
+
+        cross_v = 0.0
+        if len(self.lat_hist) >= 2 and min_lat < float("inf"):
+            for t0, l0 in self.lat_hist:
+                dt = now - t0
+                if dt >= p["closing_min_dt"]:
+                    if l0 < float("inf"):
+                        cross_v = (min_lat - l0) / dt
+                    break
+        self.cross_rate = cross_v
+
+        # Only legitimate physical speeds (-1.80 <= cross_v <= -0.15 m/s) trigger crossing hold.
+        # Faster jumps (< -1.80 m/s) are step discontinuities from new static objects entering FOV.
+        if min_lat <= p["cross_y_max"] and (p["cross_rate_max"] <= cross_v <= p["cross_rate_thr"]):
+            self.cross_hold = "crossing"
+        else:
+            self.cross_hold = None
+
+        # 4. Intersection Occupancy Zone: Check if any obstacle is currently inside intersection envelope
+        intersection_occupied = False
+        for cluster in clusters:
+            for px, py in cluster:
+                if p["cross_x_min"] <= px <= p["cross_x_max"] and abs(py) <= p["cross_clear_w"]:
+                    intersection_occupied = True
+                    break
+            if intersection_occupied:
+                break
+        self.intersection_occupied = intersection_occupied
+
     def step(self, v, w, now):
         """Computes gated (v_out, w_out) at time now."""
         p = self.p
         dt = min(max(now - self.last_t, 1e-3), 0.2) if self.last_t is not None else 0.05
         self.last_t = now
 
-        # 1. Proportional target scale based on corridor gap
+        # Proportional target scale based on forward corridor gap
         blind = (self.scan_t is None) or (now - self.scan_t > p["scan_timeout"])
         if blind or self.gap <= p["d_stop"]:
             target = 0.0
@@ -144,16 +217,39 @@ class GateLogic:
         else:
             target = 1.0
 
-        corridor_clear = (not blind) and (self.gap > p["d_stop"] + p["clear_margin"]) and (self.dyn_hold is None)
+        # Assess dynamic threats (head-on oncoming, lateral crossing, or flank breach)
+        dyn_threat = self.dyn_hold or self.cross_hold
+        if self.flank_breach:
+            dyn_threat = "flank"
+
+        # Update human-readable diagnostic trigger description
+        if dyn_threat == "flank" and self.flank_obs:
+            self.trigger_info = "flank breach at (x=%.2fm, y=%.2fm)" % self.flank_obs
+        elif dyn_threat == "crossing" and self.lat_obs:
+            self.trigger_info = "crossing at (x=%.2fm, y=%.2fm), vy=%.2fm/s" % (self.lat_obs[0], self.lat_obs[1], self.cross_rate)
+        elif dyn_threat == "moving":
+            self.trigger_info = "head-on at gap %.2fm, vx=%.2fm/s" % (self.gap, self.closing_rate)
+        elif target <= 0.0 or self.gap <= p["d_hold_static"]:
+            self.trigger_info = "blocked ahead at gap %.2fm" % self.gap
+        else:
+            self.trigger_info = "clear"
+
+        hold_threshold = max(p["d_stop"], p["d_hold_static"])
+        corridor_clear = (not blind) and (self.gap > hold_threshold + p["clear_margin"]) and (dyn_threat is None) and (not self.flank_breach)
+
+        # Intersection Occupancy Lock: While yielding to crossing traffic, stay locked until intersection is clear
+        if self.state == HOLD and self.reason == "crossing" and self.intersection_occupied:
+            corridor_clear = False
+            self.clear_since = None
 
         # 2. State Machine: FREE <-> HOLD -> GIVEUP
         if self.state == FREE:
-            if self.dyn_hold:
+            if dyn_threat:
                 self.state = HOLD
-                self.reason = self.dyn_hold
+                self.reason = dyn_threat
                 self.hold_t0 = now
                 self.clear_since = None
-            elif v > 0.0 and target <= 0.0:
+            elif v > 0.0 and (target <= 0.0 or self.gap <= p["d_hold_static"]):
                 self.state = HOLD
                 self.reason = "blocked"
                 self.hold_t0 = now
@@ -192,5 +288,7 @@ class GateLogic:
             self.scale = min(target, self.scale + p["release_rate"] * dt)
 
         v_out = v * self.scale
+        # Suppress aggressive swerving into racking when slowed down by obstacle ahead
+        w_out = w * self.scale if v > 0.0 else w
         self.last_v = v_out
-        return v_out, w
+        return v_out, w_out

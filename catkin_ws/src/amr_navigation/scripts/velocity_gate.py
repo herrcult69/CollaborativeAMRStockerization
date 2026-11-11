@@ -72,13 +72,17 @@ class VelocityGate:
 
         if self.logic.state != self.last_state:
             why = " [%s]" % self.logic.reason if self.logic.state == "hold" else ""
-            rospy.loginfo("[gate] %s -> %s%s (gap %.2fm, closing_rate %.2fm/s)",
-                          self.last_state, self.logic.state, why, self.logic.gap, self.logic.closing_rate)
+            info = " | %s" % self.logic.trigger_info if self.logic.trigger_info else ""
+            rospy.loginfo("[gate] %s -> %s%s%s (fwd_gap: %.2fm, vx: %.2fm/s)",
+                          self.last_state, self.logic.state, why, info, self.logic.gap, self.logic.closing_rate)
             self.state_pub.publish(String(self.logic.state))
             self.last_state = self.logic.state
-        elif self.logic.scale < 0.99 and out.linear.x > 0:
-            rospy.loginfo_throttle(1.0, "[gate] gap %.2fm -> scale %.2f (closing_rate %.2fm/s)",
-                                   self.logic.gap, self.logic.scale, self.logic.closing_rate)
+        else:
+            # Throttled 1.0s live telemetry so console shows real-time peripheral vision
+            lat_str = "(%.2fm, %.2fm, vy=%.2fm/s)" % (self.logic.lat_obs[0], self.logic.lat_obs[1], self.logic.cross_rate) if self.logic.lat_obs else "none"
+            flank_str = "(%.2fm, %.2fm)" % self.logic.flank_obs if self.logic.flank_obs else "clear"
+            rospy.loginfo_throttle(1.0, "[gate] gap: %.2fm (vx: %.2fm/s) | lat_obs: %s | flank: %s | state: %s | scale: %.2f",
+                                   self.logic.gap, self.logic.closing_rate, lat_str, flank_str, self.logic.state, self.logic.scale)
 
         self.publish(out)
 

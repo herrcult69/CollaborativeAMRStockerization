@@ -169,6 +169,110 @@ class TestGateLogic(unittest.TestCase):
         self.assertEqual(v_out, 0.0, "Forward drive remains blocked in GIVEUP")
         self.assertEqual(w_out, 0.4, "Angular steering unblocked in GIVEUP so robot can reroute")
 
+    def test_angular_velocity_scaling_in_warning_zone(self):
+        """When slowed down by an obstacle ahead, angular velocity must be scaled to prevent swerving."""
+        nose_x = self.gate.p["nose_x"]
+        # Obstacle at 0.9m (inside Warning Zone < 1.5m)
+        self.gate.update_scan(make_cluster(nose_x + 0.90, 0.0), 0.0)
+        v_out, w_out = self.gate.step(0.35, 0.40, 0.0)
+
+        self.assertEqual(self.gate.state, FREE)
+        self.assertLess(v_out, 0.35, "Forward speed should be scaled down")
+        self.assertLess(w_out, 0.40, "Angular velocity should be scaled down to prevent swerving into racking")
+        self.assertAlmostEqual(w_out / 0.40, v_out / 0.35, places=2, msg="w should scale proportionally with v")
+
+    def test_stationary_obstacle_inline_hold(self):
+        """A stationary obstacle within d_hold_static (0.50m) must trigger in-line HOLD [blocked]."""
+        nose_x = self.gate.p["nose_x"]
+        # Obstacle at 0.45m ahead of nose (<= d_hold_static 0.50m)
+        self.gate.update_scan(make_cluster(nose_x + 0.45, 0.0), 0.0)
+        v_out, w_out = self.gate.step(0.35, 0.20, 0.0)
+
+        self.assertEqual(self.gate.state, HOLD, "Must enter HOLD for obstacle within d_hold_static")
+        self.assertEqual(self.gate.reason, "blocked")
+        self.assertEqual(v_out, 0.0, "Must stop completely")
+        self.assertEqual(w_out, 0.0, "Must not swerve or rotate while holding")
+
+    def test_flank_protective_shield_stop(self):
+        """Points beside the chassis in the flank zone (220-270 deg FOV) must trigger immediate HOLD [flank]."""
+        # Obstacle at px = 0.10m (along chassis), py = 0.30m (flank boundary is 0.23m to 0.35m)
+        flank_pts = make_cluster(0.10, 0.30, n_pts=3, spacing=0.02)
+        self.gate.update_scan(flank_pts, 0.0)
+        v_out, w_out = self.gate.step(0.35, 0.0, 0.0)
+
+        self.assertEqual(self.gate.state, HOLD, "Flank breach must trigger immediate HOLD")
+        self.assertEqual(self.gate.reason, "flank")
+        self.assertEqual(v_out, 0.0, "Must stop forward drive")
+        self.assertEqual(w_out, 0.0)
+
+    def test_lateral_crossing_anticipation_yield(self):
+        """An obstacle moving inward from the side at an intersection must trigger early HOLD [crossing]."""
+        # Trajectory of an obstacle crossing into the aisle at 1.0 m/s inward
+        trajectory = [
+            (0.00, 0.80),
+            (0.10, 0.70),
+            (0.20, 0.60),
+            (0.30, 0.50),
+        ]
+        for t, lat_y in trajectory:
+            pts = make_cluster(0.80, lat_y, n_pts=4, spacing=0.03)
+            self.gate.update_scan(pts, t)
+            v_out, w_out = self.gate.step(0.35, 0.0, t)
+
+        self.assertEqual(self.gate.state, HOLD, "Crossing obstacle moving inward must trigger HOLD [crossing]")
+        self.assertEqual(self.gate.reason, "crossing")
+        self.assertEqual(v_out, 0.0)
+        self.assertEqual(w_out, 0.0)
+
+    def test_static_shelf_wall_outside_corridor_ignored(self):
+        """A stationary shelf wall outside corridor at constant y=0.60m must NOT trigger crossing yield."""
+        # Static wall returns at constant lateral position y = 0.60m over time
+        for t in [0.00, 0.10, 0.20, 0.30]:
+            pts = make_cluster(0.80, 0.60, n_pts=5, spacing=0.04)
+            self.gate.update_scan(pts, t)
+            v_out, _ = self.gate.step(0.35, 0.0, t)
+
+        self.assertEqual(self.gate.state, FREE, "Static shelf wall must not trigger crossing yield")
+        self.assertGreater(v_out, 0.0, "AMR should continue driving past stationary side shelves")
+
+    def test_static_jump_discontinuity_ignored(self):
+        """A new static wall corner suddenly appearing in FOV (jump > 1.8 m/s) must NOT trigger crossing yield."""
+        # Frame 0: distant wall at y = 1.90m
+        self.gate.update_scan(make_cluster(0.80, 1.90, n_pts=3), 0.00)
+        self.gate.step(0.35, 0.0, 0.0)
+
+        # Frame 1: a closer rack corner appears at y = 0.60m in 0.1s (apparent rate = -13.0 m/s!)
+        self.gate.update_scan(make_cluster(0.80, 0.60, n_pts=3), 0.10)
+        v_out, _ = self.gate.step(0.35, 0.0, 0.10)
+
+        self.assertEqual(self.gate.state, FREE, "Unphysical step jump must be rejected as FOV entrance, not moving obstacle")
+        self.assertGreater(v_out, 0.0)
+
+    def test_intersection_occupancy_lock(self):
+        """While yielding to a crossing obstacle, AMR must remain in HOLD until the obstacle completely clears the intersection."""
+        # 1. Trigger crossing hold with inward moving obstacle (1.0 m/s inward)
+        for t, lat_y in [(0.0, 1.2), (0.1, 1.1), (0.2, 1.0)]:
+            self.gate.update_scan(make_cluster(0.80, lat_y), t)
+            self.gate.step(0.35, 0.0, t)
+        self.assertEqual(self.gate.state, HOLD)
+        self.assertEqual(self.gate.reason, "crossing")
+
+        # 2. Obstacle is now sitting right in the middle of the intersection (x=0.8, y=0.10m, rate=0.0)
+        self.gate.update_scan(make_cluster(0.80, 0.10), 0.5)
+        self.gate.step(0.35, 0.0, 0.5)
+        self.assertEqual(self.gate.state, HOLD, "Must stay in HOLD while intersection is occupied, even if rate is 0")
+
+        # 3. Obstacle exits the intersection to the other side (y = 1.30m, outside cross_clear_w 1.00m)
+        self.gate.update_scan(make_cluster(0.80, 1.30), 1.0)
+        self.gate.step(0.35, 0.0, 1.0)
+        self.assertEqual(self.gate.state, HOLD, "Must not release immediately at t=1.0")
+
+        # 4. After clear_time (0.8s), AMR safely releases to FREE
+        self.gate.update_scan([], 2.0)
+        v_out, _ = self.gate.step(0.35, 0.0, 2.0)
+        self.assertEqual(self.gate.state, FREE, "Must release to FREE once intersection is fully cleared")
+        self.assertGreater(v_out, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
