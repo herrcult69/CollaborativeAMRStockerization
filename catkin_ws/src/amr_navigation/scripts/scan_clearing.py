@@ -37,7 +37,7 @@ class ScanClearing:
     def laser_pose(self, msg):
         try:
             tr = self.tf_buffer.lookup_transform(self.map_frame, msg.header.frame_id, msg.header.stamp,
-                                                 rospy.Duration(0.05)).transform
+                                                 rospy.Duration(0.2)).transform
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
             rospy.logwarn_throttle(10.0, "[scan_clearing] no %s pose, blind arc not cleared: %s", self.map_frame, e)
             return None

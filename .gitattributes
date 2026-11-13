@@ -1,3 +1,9 @@
-# Scripts executed in the Linux ROS container must retain LF line endings.
+# Scripts and configuration files executed in Linux ROS container must retain LF line endings.
+* text=auto eol=lf
 *.py text eol=lf
 *.sh text eol=lf
+*.bash text eol=lf
+*.launch text eol=lf
+*.yaml text eol=lf
+*.urdf text eol=lf
+*.xacro text eol=lf

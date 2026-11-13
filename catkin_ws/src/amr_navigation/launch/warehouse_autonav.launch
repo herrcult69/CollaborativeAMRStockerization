@@ -51,9 +51,16 @@
   <!-- 1. Unity Bridge (ROS-TCP-Endpoint) -->
   <include file="$(find amr_navigation)/launch/unity_bridge.launch" />
 
-  <!-- 2. Sensor Mount TF -->
+  <!-- 2. Robot URDF Description & State Publisher (for 3D RobotModel in RViz) -->
+  <param name="robot_description" textfile="$(eval find('amr_description') + '/urdf/' + {'xstack': 'xstack_amr', 'legacy': 'stacker_amr'}[arg('robot_profile')] + '.urdf')" />
+  <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher" />
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+
+  <!-- 2b. Sensor Mount TF (disabled when robot_state_publisher owns the kinematic tree to prevent TF duplicates) -->
   <include file="$(find amr_navigation)/launch/laser_tf.launch">
     <arg name="robot_profile" value="$(arg robot_profile)" />
+    <arg name="publish_base_mount" value="false" />
+    <arg name="publish_laser_mount" value="false" />
   </include>
 
   <!-- 3. Warehouse Localization (Map Server + AMCL) -->

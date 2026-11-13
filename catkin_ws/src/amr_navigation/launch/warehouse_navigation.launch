@@ -44,10 +44,15 @@
     <!-- <remap from="cmd_vel" to="/cmd_vel"/> -->
     <remap from="cmd_vel" to="/cmd_vel_nav"/>
   </node>
+  <!-- Optional URDF robot_description parameter for RViz if standalone -->
+  <param unless="$(eval optenv('robot_description') != '')" name="robot_description"
+         textfile="$(eval find('amr_description') + '/urdf/' + {'xstack': 'xstack_amr', 'legacy': 'stacker_amr'}[arg('robot_profile')] + '.urdf')" />
+
   <!-- Clearing-only scan for the costmaps (laser_clearing source in costmap_common.yaml): removes the trails
        dynamic obstacles leave between lidar rays and in the blind rear arc. -->
   <node pkg="amr_navigation" type="scan_clearing.py" name="scan_clearing" output="screen" />
   <node pkg="amr_navigation" type="velocity_gate.py" name="velocity_gate" output="screen">
     <param name="hold_timeout" value="$(arg gate_hold_timeout)" />
+    <param name="base_frame" value="$(arg base_frame)" />
   </node>
 </launch>

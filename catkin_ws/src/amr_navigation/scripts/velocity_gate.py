@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Gates move_base velocity (Option B: Industrial Safety Shield + Closing-Rate Yield).
-Protective stop at close range, proportional deceleration in warning zone, and early HOLD for oncoming traffic.
+"""Gates move_base velocity: Dual-Shield Linear Heading Guard Architecture.
+Protective stop at close range, proportional linear deceleration in warning zone,
+and linear heading lock (restricting TEB swerving into racks).
 Subscribes: /cmd_vel_nav (from move_base), /scan (LaserScan)
 Publishes: /cmd_vel (to robot driver), /velocity_gate/state (diagnostic state)
 """
@@ -11,6 +12,7 @@ import rospy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
+from visualization_msgs.msg import Marker, MarkerArray
 
 from amr_navigation.gate_logic import DEFAULTS, GateLogic
 
@@ -18,11 +20,12 @@ from amr_navigation.gate_logic import DEFAULTS, GateLogic
 class VelocityGate:
     def __init__(self):
         self.laser_x = rospy.get_param("~laser_x", DEFAULTS["laser_x"])
+        self.base_frame = rospy.get_param("~base_frame", "drive_center")
         params = {k: rospy.get_param("~" + k, v) for k, v in DEFAULTS.items()}
         params["half_w"] = rospy.get_param("~half_width", 0.23) + rospy.get_param("~side_margin", 0.10)
         self.logic = GateLogic(**params)
 
-        self.cmd_timeout = rospy.get_param("~cmd_timeout", 0.3)
+        self.cmd_timeout = rospy.get_param("~cmd_timeout", 0.5)
         self.rate = 20.0
         self.cmd, self.cmd_t = None, 0.0
         self.last_state = None
@@ -31,9 +34,11 @@ class VelocityGate:
 
         self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
         self.state_pub = rospy.Publisher("/velocity_gate/state", String, queue_size=1, latch=True)
+        self.shield_pub = rospy.Publisher("/velocity_gate/shields", MarkerArray, queue_size=1)
         rospy.Subscriber("/scan", LaserScan, self.on_scan, queue_size=1)
         rospy.Subscriber("/cmd_vel_nav", Twist, self.on_cmd, queue_size=1)
         rospy.Timer(rospy.Duration(1.0 / self.rate), self.on_timer)
+        rospy.Timer(rospy.Duration(0.1), self.publish_shields)
 
     def on_scan(self, msg):
         now = rospy.Time.now().to_sec()
@@ -73,18 +78,181 @@ class VelocityGate:
         if self.logic.state != self.last_state:
             why = " [%s]" % self.logic.reason if self.logic.state == "hold" else ""
             info = " | %s" % self.logic.trigger_info if self.logic.trigger_info else ""
-            rospy.loginfo("[gate] %s -> %s%s%s (fwd_gap: %.2fm, vx: %.2fm/s)",
-                          self.last_state, self.logic.state, why, info, self.logic.gap, self.logic.closing_rate)
+            rospy.loginfo("[gate] %s -> %s%s%s (fwd_gap: %.2fm)",
+                          self.last_state, self.logic.state, why, info, self.logic.gap)
             self.state_pub.publish(String(self.logic.state))
             self.last_state = self.logic.state
         else:
-            # Throttled 1.0s live telemetry so console shows real-time peripheral vision
-            lat_str = "(%.2fm, %.2fm, vy=%.2fm/s)" % (self.logic.lat_obs[0], self.logic.lat_obs[1], self.logic.cross_rate) if self.logic.lat_obs else "none"
+            # Throttled 1.0s live telemetry so console shows real-time state and velocities
             flank_str = "(%.2fm, %.2fm)" % self.logic.flank_obs if self.logic.flank_obs else "clear"
-            rospy.loginfo_throttle(1.0, "[gate] gap: %.2fm (vx: %.2fm/s) | lat_obs: %s | flank: %s | state: %s | scale: %.2f",
-                                   self.logic.gap, self.logic.closing_rate, lat_str, flank_str, self.logic.state, self.logic.scale)
+            rospy.loginfo_throttle(1.0, "[gate] gap: %.2fm | state: %s | scale: %.2f | v_out: %.2fm/s, w_out: %.2frad/s | flank: %s",
+                                   self.logic.gap, self.logic.state, self.logic.scale, out.linear.x, out.angular.z, flank_str)
 
         self.publish(out)
+
+    def publish_shields(self, _):
+        if self.shield_pub.get_num_connections() == 0:
+            return  # Zero overhead when RViz is closed
+
+        p = self.logic.p
+        nose_x = p["nose_x"]
+        d_inner = p.get("d_inner", p.get("d_stop", 0.35))
+        d_outer = p.get("d_outer", p.get("d_slow", 1.20))
+        half_w = p["half_w"]
+        flank_x_min = p.get("flank_x_min", -0.20)
+        flank_w = p.get("flank_w", 0.35)
+
+        with self.lock:
+            state = self.logic.state
+            scale = self.logic.scale
+            gap = self.logic.gap
+            reason = self.logic.reason
+            flank_breach = self.logic.flank_breach
+            crossing_obs = self.logic.crossing_obs
+
+        stamp = rospy.Time.now()
+
+        # 1. Inner Protective Shield (Stop Zone)
+        m_inner = Marker()
+        m_inner.header.frame_id = self.base_frame
+        m_inner.header.stamp = stamp
+        m_inner.ns = "shields"
+        m_inner.id = 1
+        m_inner.type = Marker.CUBE
+        m_inner.action = Marker.ADD
+        m_inner.pose.position.x = nose_x + d_inner / 2.0
+        m_inner.pose.position.y = 0.0
+        m_inner.pose.position.z = 0.10
+        m_inner.pose.orientation.w = 1.0
+        m_inner.scale.x = d_inner
+        m_inner.scale.y = 2.0 * half_w
+        m_inner.scale.z = 0.20
+        if gap <= d_inner or (state == "hold" and reason == "blocked"):
+            m_inner.color.r, m_inner.color.g, m_inner.color.b, m_inner.color.a = 1.0, 0.0, 0.0, 0.70
+        elif state == "hold" and reason == "crossing":
+            m_inner.color.r, m_inner.color.g, m_inner.color.b, m_inner.color.a = 1.0, 0.0, 1.0, 0.60
+        else:
+            m_inner.color.r, m_inner.color.g, m_inner.color.b, m_inner.color.a = 0.9, 0.15, 0.15, 0.20
+
+        # 2. Outer Warning Shield (Deceleration Corridor)
+        m_outer = Marker()
+        m_outer.header.frame_id = self.base_frame
+        m_outer.header.stamp = stamp
+        m_outer.ns = "shields"
+        m_outer.id = 2
+        m_outer.type = Marker.CUBE
+        m_outer.action = Marker.ADD
+        len_outer = max(0.05, d_outer - d_inner)
+        m_outer.pose.position.x = nose_x + d_inner + len_outer / 2.0
+        m_outer.pose.position.y = 0.0
+        m_outer.pose.position.z = 0.07
+        m_outer.pose.orientation.w = 1.0
+        m_outer.scale.x = len_outer
+        m_outer.scale.y = 2.0 * half_w
+        m_outer.scale.z = 0.14
+        if state == "free" and scale < 0.99:
+            m_outer.color.r, m_outer.color.g, m_outer.color.b, m_outer.color.a = 1.0, 0.60, 0.0, 0.60
+        elif state == "hold":
+            m_outer.color.r, m_outer.color.g, m_outer.color.b, m_outer.color.a = 0.75, 0.50, 0.0, 0.15
+        else:
+            m_outer.color.r, m_outer.color.g, m_outer.color.b, m_outer.color.a = 0.95, 0.85, 0.10, 0.18
+
+        # 3. Flank Left Shield
+        len_flank = nose_x - flank_x_min
+        mid_x = (nose_x + flank_x_min) / 2.0
+        w_flank = flank_w - 0.23
+        mid_y = (flank_w + 0.23) / 2.0
+
+        m_flank_l = Marker()
+        m_flank_l.header.frame_id = self.base_frame
+        m_flank_l.header.stamp = stamp
+        m_flank_l.ns = "shields"
+        m_flank_l.id = 3
+        m_flank_l.type = Marker.CUBE
+        m_flank_l.action = Marker.ADD
+        m_flank_l.pose.position.x = mid_x
+        m_flank_l.pose.position.y = mid_y
+        m_flank_l.pose.position.z = 0.10
+        m_flank_l.pose.orientation.w = 1.0
+        m_flank_l.scale.x = len_flank
+        m_flank_l.scale.y = w_flank
+        m_flank_l.scale.z = 0.20
+
+        # 4. Flank Right Shield
+        m_flank_r = Marker()
+        m_flank_r.header.frame_id = self.base_frame
+        m_flank_r.header.stamp = stamp
+        m_flank_r.ns = "shields"
+        m_flank_r.id = 4
+        m_flank_r.type = Marker.CUBE
+        m_flank_r.action = Marker.ADD
+        m_flank_r.pose.position.x = mid_x
+        m_flank_r.pose.position.y = -mid_y
+        m_flank_r.pose.position.z = 0.10
+        m_flank_r.pose.orientation.w = 1.0
+        m_flank_r.scale.x = len_flank
+        m_flank_r.scale.y = w_flank
+        m_flank_r.scale.z = 0.20
+
+        if flank_breach:
+            for m in (m_flank_l, m_flank_r):
+                m.color.r, m.color.g, m.color.b, m.color.a = 1.0, 0.0, 0.8, 0.80
+        else:
+            for m in (m_flank_l, m_flank_r):
+                m.color.r, m.color.g, m.color.b, m.color.a = 0.1, 0.5, 0.9, 0.16
+
+        # 5. Floating Status Billboard
+        m_text = Marker()
+        m_text.header.frame_id = self.base_frame
+        m_text.header.stamp = stamp
+        m_text.ns = "shields"
+        m_text.id = 0
+        m_text.type = Marker.TEXT_VIEW_FACING
+        m_text.action = Marker.ADD
+        m_text.pose.position.x = 0.10
+        m_text.pose.position.y = 0.0
+        m_text.pose.position.z = 0.70
+        m_text.pose.orientation.w = 1.0
+        m_text.scale.z = 0.14
+
+        gap_str = "%.2fm" % gap if gap < 99.0 else "clear"
+        if state == "hold":
+            if reason == "crossing":
+                m_text.text = "SHIELD: YIELD (crossing) | gap: %s" % gap_str
+            else:
+                m_text.text = "SHIELD: HOLD [%s] | gap: %s" % (reason or "blocked", gap_str)
+            m_text.color.r, m_text.color.g, m_text.color.b, m_text.color.a = 1.0, 0.2, 0.2, 1.0
+        elif scale < 0.99 and state == "free":
+            m_text.text = "SHIELD: SLOW (%.0f%%) | gap: %s" % (scale * 100, gap_str)
+            m_text.color.r, m_text.color.g, m_text.color.b, m_text.color.a = 1.0, 0.7, 0.0, 1.0
+        elif state == "giveup":
+            m_text.text = "SHIELD: GIVEUP / REROUTE"
+            m_text.color.r, m_text.color.g, m_text.color.b, m_text.color.a = 0.9, 0.4, 1.0, 1.0
+        else:
+            m_text.text = "SHIELD: CLEAR | gap: %s" % gap_str
+            m_text.color.r, m_text.color.g, m_text.color.b, m_text.color.a = 0.2, 1.0, 0.3, 0.90
+
+        # 6. Suspected crossing object
+        m_cross = Marker()
+        m_cross.header.frame_id = self.base_frame
+        m_cross.header.stamp = stamp
+        m_cross.ns = "shields"
+        m_cross.id = 6
+        if crossing_obs is not None and state == "hold" and reason == "crossing":
+            m_cross.type = Marker.SPHERE
+            m_cross.action = Marker.ADD
+            m_cross.pose.position.x = crossing_obs[0]
+            m_cross.pose.position.y = crossing_obs[1]
+            m_cross.pose.position.z = 0.15
+            m_cross.pose.orientation.w = 1.0
+            m_cross.scale.x = m_cross.scale.y = m_cross.scale.z = 0.20
+            m_cross.color.r, m_cross.color.g, m_cross.color.b, m_cross.color.a = 1.0, 0.0, 1.0, 0.90
+        else:
+            m_cross.action = Marker.DELETE
+
+        arr = MarkerArray()
+        arr.markers = [m_inner, m_outer, m_flank_l, m_flank_r, m_text, m_cross]
+        self.shield_pub.publish(arr)
 
 
 if __name__ == "__main__":
