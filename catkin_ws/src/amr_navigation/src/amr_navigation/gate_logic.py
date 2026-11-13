@@ -28,7 +28,7 @@ DEFAULTS = dict(
     d_inner=0.25,             # Inner protective shield depth ahead of nose (m) [Category 0 Stop]
     d_outer=1.00,             # Outer warning shield depth ahead of nose (m) [Deceleration horizon]
     d_hold_static=0.30,       # Distance ahead to trigger in-line HOLD for stationary obstacle (m)
-    omega_corridor_max=0.10,  # Max angular velocity allowed when cruising in corridor (rad/s)
+    omega_corridor_max=0.10,  # UNUSED (heading lock removed; kept because the launch still sets it)
     min_crawl_speed=0.10,     # Minimum forward speed during slowdown (prevents stall on PhysX friction) (m/s)
     flank_x_min=-0.20,        # Rear boundary along chassis for side flank protection (m)
     flank_w=0.35,             # Lateral boundary from centerline for flank protection (m)
@@ -48,10 +48,43 @@ DEFAULTS = dict(
     cross_confirm=3,          # Consecutive scans a crossing threat must persist
     cross_max_extent=0.80,    # Ignore clusters longer than this (walls, rack faces) (m)
     cross_w_max=0.30,         # Skip crossing detection while |commanded w| exceeds this (rad/s)
+    blocker_half_width=0.60,  # Half-length of the GIVEUP blocker line across the passage (m)
+    blocker_ttl=60.0,         # How long the global-costmap blocker stays published (s)
+    blocker_spacing=0.05,     # Point spacing along the blocker line (m)
+    shim_lookahead=0.60,      # GIVEUP rotation shim: distance walked along the new plan (m)
+    shim_tol=0.15,            # GIVEUP rotation shim: heading error below this stops turning (rad)
+    shim_plan_age=3.0,        # GIVEUP rotation shim: max age of the plan used (s)
     # Backward compatibility aliases:
     d_stop=0.35,              # Maps to d_inner
     d_slow=1.20,              # Maps to d_outer
 )
+
+
+def blocker_points(gap, p):
+    """Base-frame points of a line across the heading, just past the blocked gap."""
+    x = p["nose_x"] + max(gap, 0.10)
+    n = int(round(2.0 * p["blocker_half_width"] / p["blocker_spacing"]))
+    return [(x, -p["blocker_half_width"] + i * p["blocker_spacing"]) for i in range(n + 1)]
+
+
+def path_heading_error(pose, plan_xy, lookahead):
+    """Bearing error (rad, [-pi, pi], +left) from pose (x, y, yaw) to a point `lookahead` m along plan_xy.
+
+    Starts at the plan point nearest the robot. Returns None for an empty plan.
+    """
+    if not plan_xy:
+        return None
+    x, y, yaw = pose
+    i = min(range(len(plan_xy)), key=lambda k: (plan_xy[k][0] - x) ** 2 + (plan_xy[k][1] - y) ** 2)
+    tx, ty = plan_xy[i]
+    walked = 0.0
+    while i + 1 < len(plan_xy) and walked < lookahead:
+        nx, ny = plan_xy[i + 1]
+        walked += math.hypot(nx - tx, ny - ty)
+        tx, ty = nx, ny
+        i += 1
+    err = math.atan2(ty - y, tx - x) - yaw
+    return math.atan2(math.sin(err), math.cos(err))
 
 
 class FreeSpaceDetector:
@@ -210,8 +243,11 @@ class GateLogic:
         # 4. Crossing-obstacle detection (yield before it enters the corridor)
         self._update_crossing(clusters, now)
 
-    def step(self, v, w, now):
-        """Computes gated (v_out, w_out) enforcing Inner/Outer shields and in-place pivot freedom."""
+    def step(self, v, w, now, heading_err=None):
+        """Computes gated (v_out, w_out) enforcing Inner/Outer shields and in-place pivot freedom.
+
+        heading_err (rad, optional): bearing error to the new global path; only used in GIVEUP.
+        """
         p = self.p
         dt = min(max(now - self.last_t, 1e-3), 0.2) if self.last_t is not None else 0.05
         self.last_t = now
@@ -219,7 +255,6 @@ class GateLogic:
         d_inner = p.get("d_inner", p.get("d_stop", 0.35))
         d_outer = p.get("d_outer", p.get("d_slow", 1.20))
         d_hold_static = p.get("d_hold_static", 0.45)
-        omega_max = p.get("omega_corridor_max", 0.05)
         min_crawl = p.get("min_crawl_speed", 0.10)
 
         blind = (self.scan_t is None) or (now - self.scan_t > p["scan_timeout"])
@@ -294,7 +329,12 @@ class GateLogic:
             v_out = 0.0 if not corridor_clear else v * self.scale
             self.last_v = v_out
             gmax = p.get("giveup_w_max", 0.30)
-            w_out = max(-gmax, min(gmax, w))
+            if heading_err is None:
+                w_out = max(-gmax, min(gmax, w))
+            elif abs(heading_err) > p.get("shim_tol", 0.15):
+                w_out = math.copysign(gmax, heading_err)
+            else:
+                w_out = 0.0
             self.last_w = w_out
             return v_out, w_out
 
@@ -310,12 +350,10 @@ class GateLogic:
         else:
             v_out = v * self.scale
 
-        # 4. Angular Velocity Control:
-        # Only clamp w when an obstacle is detected in the outer warning shield (gap <= d_outer or scale < 1.0)
-        # AND driving forward at cruising speed (v_out > 0.02 m/s).
-        # In clear open space (gap > d_outer), TEB has 100% full steering freedom!
-        if (self.gap <= d_outer or self.scale < 1.0) and v_out > 0.02 and abs(w) > omega_max:
-            w_out = math.copysign(omega_max, w)
+        # 4. Angular Velocity Control: keep the curvature TEB planned (w / v unchanged).
+        # w follows the same factor as v (including the crawl floor); pure rotation passes unchanged.
+        if v > 0.02:
+            w_out = w * (v_out / v)
         else:
             w_out = w
 

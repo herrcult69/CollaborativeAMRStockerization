@@ -11,7 +11,7 @@ _pkg_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src", 
 if os.path.isdir(_pkg_src) and _pkg_src not in sys.path:
     sys.path.insert(0, _pkg_src)
 
-from gate_logic import DEFAULTS, FREE, GIVEUP, HOLD, GateLogic
+from gate_logic import DEFAULTS, FREE, GIVEUP, HOLD, GateLogic, path_heading_error
 
 
 def make_cluster(center_x, center_y, n_pts=3, spacing=0.03):
@@ -63,20 +63,20 @@ class TestDualShieldGateLogic(unittest.TestCase):
         self.assertGreater(v_out, 0.0)
 
     def test_outer_shield_linear_heading_lock_at_cruising_speed(self):
-        """When driving forward at cruising speed (v > 0.12 m/s), TEB swerve arcs are clamped to omega_max."""
+        """When slowing in outer shield, w scales proportionally with v, preserving planned curvature w / v."""
         nose_x = self.gate.p["nose_x"]
-        omega_max = self.gate.p["omega_corridor_max"]  # 0.05 rad/s
 
         # Obstacle at 1.00m ahead in Outer Shield (v_out will be > 0.12 m/s)
         pts = make_cluster(nose_x + 1.00, 0.0, n_pts=5)
         self.gate.update_scan(pts, 0.0)
 
-        # TEB commands full angular swerve (w = 0.45 rad/s) to turn around obstacle into racks
+        # TEB commands full angular swerve (w = 0.45 rad/s)
         v_out, w_out = self.gate.step(0.35, 0.45, 0.0)
 
         self.assertGreater(v_out, 0.12)
-        # Angular velocity must be clamped to omega_max, preventing swerving into racking
-        self.assertAlmostEqual(abs(w_out), omega_max, places=2)
+        # Angular velocity follows v scaling: w_out / v_out == w / v
+        self.assertAlmostEqual(w_out / v_out, 0.45 / 0.35, places=3)
+        self.assertAlmostEqual(w_out, 0.45 * (v_out / 0.35), places=3)
 
     def test_inner_shield_category0_stop(self):
         """Obstacle within d_inner (0.35m ahead of nose) must produce zero linear velocity."""
@@ -369,7 +369,7 @@ class TestShieldTuning(unittest.TestCase):
         self.assertEqual(DEFAULTS["scale_min"], 0.25)
 
     def test_crawl_speed_heading_lock(self):
-        """Gap 0.5: v_out ~0.175, |w| <= 0.10. Gap 0.35: v_out ~0.12 (crawl path), |w| <= 0.10."""
+        """Curvature rule: gap 0.5 (v_out ~0.175) and gap 0.35 (crawl path) preserve w / v curvature."""
         nose_x = self.gate.p["nose_x"]
         for gap, exp_v in ((0.5, 0.175), (0.35, 0.35 * 0.35)):
             gate = GateLogic()
@@ -378,7 +378,8 @@ class TestShieldTuning(unittest.TestCase):
             vo, wo = gate.step(0.35, 0.65, 0.0)
             self.assertEqual(gate.state, FREE)
             self.assertAlmostEqual(vo, exp_v, places=3)
-            self.assertLessEqual(abs(wo), 0.10 + 1e-9)
+            self.assertAlmostEqual(wo / vo, 0.65 / 0.35, places=3)
+            self.assertAlmostEqual(wo, 0.65 * (vo / 0.35), places=3)
 
     def test_slowdown_scale_floor(self):
         """Gap 0.5 -> scale 0.50; gap 0.25 -> 0 (hold)."""
@@ -424,6 +425,180 @@ class TestShieldTuning(unittest.TestCase):
         self.assertEqual(self.gate.state, HOLD)
         self.assertEqual(self.gate.reason, "blocked")
         self.assertEqual(v28, 0.0)
+
+
+class TestTebSameRouteBlocker(unittest.TestCase):
+    """Tests corresponding to .agents/feature-plan.md Test Plan for teb-same-route task."""
+
+    def test_new_defaults_blocker_keys(self):
+        """Defaults test covers the new keys: blocker_half_width, blocker_ttl, blocker_spacing."""
+        from gate_logic import DEFAULTS
+        self.assertEqual(DEFAULTS["blocker_half_width"], 0.60)
+        self.assertEqual(DEFAULTS["blocker_ttl"], 60.0)
+        self.assertEqual(DEFAULTS["blocker_spacing"], 0.05)
+
+    def test_blocker_points_normal_gap(self):
+        """blocker_points(0.29, DEFAULTS): 25 points, all at x = 0.37 + 0.29, y symmetric from -0.60 to +0.60."""
+        from gate_logic import DEFAULTS, blocker_points
+        pts = blocker_points(0.29, DEFAULTS)
+        self.assertEqual(len(pts), 25)
+        nose_x = DEFAULTS.get("nose_x", 0.37)
+        exp_x = nose_x + 0.29
+        for x, y in pts:
+            self.assertAlmostEqual(x, exp_x, places=4)
+        ys = [p[1] for p in pts]
+        self.assertAlmostEqual(min(ys), -0.60, places=4)
+        self.assertAlmostEqual(max(ys), 0.60, places=4)
+        for y in ys:
+            self.assertTrue(any(abs(y + other) < 1e-4 for other in ys), f"Point {y} not symmetric")
+        for i in range(len(ys) - 1):
+            self.assertAlmostEqual(ys[i + 1] - ys[i], 0.05, places=4)
+
+    def test_blocker_points_clamped_gap(self):
+        """blocker_points(0.0, ...) clamps x to nose_x + 0.10."""
+        from gate_logic import DEFAULTS, blocker_points
+        nose_x = DEFAULTS.get("nose_x", 0.37)
+        exp_x = nose_x + 0.10
+        pts = blocker_points(0.0, DEFAULTS)
+        self.assertEqual(len(pts), 25)
+        for x, y in pts:
+            self.assertAlmostEqual(x, exp_x, places=4)
+
+        pts_neg = blocker_points(-0.50, DEFAULTS)
+        self.assertEqual(len(pts_neg), 25)
+        for x, y in pts_neg:
+            self.assertAlmostEqual(x, exp_x, places=4)
+
+    def test_blocker_points_custom_params(self):
+        """blocker_points respects custom blocker_half_width, blocker_spacing, and nose_x."""
+        from gate_logic import blocker_points
+        custom_p = {
+            "nose_x": 0.50,
+            "blocker_half_width": 0.30,
+            "blocker_spacing": 0.10,
+        }
+        pts = blocker_points(0.40, custom_p)
+        self.assertEqual(len(pts), 7)
+        for x, y in pts:
+            self.assertAlmostEqual(x, 0.50 + 0.40, places=4)
+        ys = [p[1] for p in pts]
+        self.assertAlmostEqual(ys[0], -0.30, places=4)
+        self.assertAlmostEqual(ys[-1], 0.30, places=4)
+
+
+class TestNavAssessment(unittest.TestCase):
+    """Tests corresponding to .agents/feature-plan.md Test Plan for nav-assessment task."""
+
+    def _pad(self, cluster):
+        return [(-3.0, -3.0)] + cluster + [(-3.0, 3.0)]
+
+    def test_new_defaults_shim_keys(self):
+        """DEFAULTS contains shim_lookahead=0.60, shim_tol=0.15, shim_plan_age=3.0."""
+        self.assertEqual(DEFAULTS["shim_lookahead"], 0.60)
+        self.assertEqual(DEFAULTS["shim_tol"], 0.15)
+        self.assertEqual(DEFAULTS["shim_plan_age"], 3.0)
+
+    def test_free_curvature_preserved_during_slowdown(self):
+        """FREE, gap 0.5, v 0.35, w 0.45: w_out / v_out equals 0.45 / 0.35 (curvature kept)."""
+        gate = GateLogic()
+        nose_x = gate.p["nose_x"]
+        obs = [(nose_x + 0.5, -0.05), (nose_x + 0.5, 0.0), (nose_x + 0.5, 0.05)]
+        gate.update_scan(self._pad(obs), 0.0)
+        vo, wo = gate.step(0.35, 0.45, 0.0)
+
+        self.assertEqual(gate.state, FREE)
+        self.assertAlmostEqual(vo, 0.175, places=3)
+        self.assertAlmostEqual(wo / vo, 0.45 / 0.35, places=3)
+        self.assertAlmostEqual(wo, 0.45 * (vo / 0.35), places=3)
+
+    def test_free_curvature_preserved_at_crawl_floor(self):
+        """FREE at crawl floor (v*scale < 0.10): v_out is 0.10 and w_out / v_out still equals w / v."""
+        gate = GateLogic()
+        nose_x = gate.p["nose_x"]
+        # gap 0.35 gives scale = 0.35. For v = 0.20, v * scale = 0.07 < min_crawl_speed (0.10)
+        obs = [(nose_x + 0.35, -0.05), (nose_x + 0.35, 0.0), (nose_x + 0.35, 0.05)]
+        gate.update_scan(self._pad(obs), 0.0)
+        vo, wo = gate.step(0.20, 0.40, 0.0)
+
+        self.assertEqual(gate.state, FREE)
+        self.assertAlmostEqual(vo, 0.10, places=3)
+        self.assertAlmostEqual(wo / vo, 0.40 / 0.20, places=3)
+        self.assertAlmostEqual(wo, 0.20, places=3)
+
+    def test_free_pure_rotation_unclamped_with_outer_shield_obstacle(self):
+        """FREE, v 0, w 0.4, gap 0.5: output (0, 0.4)."""
+        gate = GateLogic()
+        nose_x = gate.p["nose_x"]
+        obs = [(nose_x + 0.5, -0.05), (nose_x + 0.5, 0.0), (nose_x + 0.5, 0.05)]
+        gate.update_scan(self._pad(obs), 0.0)
+        vo, wo = gate.step(0.0, 0.4, 0.0)
+
+        self.assertEqual(gate.state, FREE)
+        self.assertEqual((vo, wo), (0.0, 0.4))
+
+    def test_giveup_rotation_shim(self):
+        """GIVEUP with heading_err +1.0: (0, +0.30); -1.0: (0, -0.30); 0.05: (0, 0); None with TEB w 0.65: (0, 0.30)."""
+        gate = GateLogic()
+        nose_x = gate.p["nose_x"]
+        obs = [(nose_x + 0.28, -0.05), (nose_x + 0.28, 0.0), (nose_x + 0.28, 0.05)]
+        gate.update_scan(self._pad(obs), 0.0)
+        gate.step(0.35, 0.0, 0.0)
+        self.assertEqual(gate.state, HOLD)
+
+        # Advance past hold_timeout (10.0s)
+        t = 11.0
+        gate.update_scan(self._pad(obs), t)
+
+        # heading_err = +1.0 -> turn positive at giveup_w_max (0.30)
+        vo1, wo1 = gate.step(0.0, 0.50, t, heading_err=1.0)
+        self.assertEqual(gate.state, GIVEUP)
+        self.assertEqual(vo1, 0.0)
+        self.assertAlmostEqual(wo1, 0.30, places=3)
+
+        # heading_err = -1.0 -> turn negative at giveup_w_max (-0.30)
+        vo2, wo2 = gate.step(0.0, 0.50, t + 0.1, heading_err=-1.0)
+        self.assertEqual(gate.state, GIVEUP)
+        self.assertEqual(vo2, 0.0)
+        self.assertAlmostEqual(wo2, -0.30, places=3)
+
+        # heading_err = 0.05 (|err| <= shim_tol 0.15) -> stop turning (0.0)
+        vo3, wo3 = gate.step(0.0, 0.50, t + 0.2, heading_err=0.05)
+        self.assertEqual(gate.state, GIVEUP)
+        self.assertEqual(vo3, 0.0)
+        self.assertAlmostEqual(wo3, 0.0, places=3)
+
+        # heading_err = None -> fallback to TEB w clamped to giveup_w_max
+        vo4, wo4 = gate.step(0.0, 0.65, t + 0.3, heading_err=None)
+        self.assertEqual(gate.state, GIVEUP)
+        self.assertEqual(vo4, 0.0)
+        self.assertAlmostEqual(wo4, 0.30, places=3)
+
+    def test_path_heading_error(self):
+        """path_heading_error: straight ahead gives 0; behind gives about +/-pi; left gives positive."""
+        import math
+        # Straight plan ahead: robot at origin facing +x (yaw=0)
+        pose_fwd = (0.0, 0.0, 0.0)
+        plan_fwd = [(0.0, 0.0), (0.3, 0.0), (0.6, 0.0), (1.0, 0.0)]
+        err_fwd = path_heading_error(pose_fwd, plan_fwd, lookahead=0.60)
+        self.assertAlmostEqual(err_fwd, 0.0, places=3)
+
+        # Plan behind: robot at origin facing +x (yaw=0), plan goes along -x
+        plan_back = [(0.0, 0.0), (-0.3, 0.0), (-0.6, 0.0), (-1.0, 0.0)]
+        err_back = path_heading_error(pose_fwd, plan_back, lookahead=0.60)
+        self.assertAlmostEqual(abs(err_back), math.pi, places=3)
+
+        # Plan to the left (+y direction): bearing error must be +pi/2
+        plan_left = [(0.0, 0.0), (0.0, 0.3), (0.0, 0.6), (0.0, 1.0)]
+        err_left = path_heading_error(pose_fwd, plan_left, lookahead=0.60)
+        self.assertAlmostEqual(err_left, math.pi / 2, places=3)
+
+        # Plan to the right (-y direction): bearing error must be -pi/2
+        plan_right = [(0.0, 0.0), (0.0, -0.3), (0.0, -0.6), (0.0, -1.0)]
+        err_right = path_heading_error(pose_fwd, plan_right, lookahead=0.60)
+        self.assertAlmostEqual(err_right, -math.pi / 2, places=3)
+
+        # Empty plan returns None
+        self.assertIsNone(path_heading_error((0.0, 0.0, 0.0), [], 0.60))
 
 
 if __name__ == "__main__":

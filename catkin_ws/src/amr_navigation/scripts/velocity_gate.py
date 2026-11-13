@@ -3,18 +3,23 @@
 Protective stop at close range, proportional linear deceleration in warning zone,
 and linear heading lock (restricting TEB swerving into racks).
 Subscribes: /cmd_vel_nav (from move_base), /scan (LaserScan)
-Publishes: /cmd_vel (to robot driver), /velocity_gate/state (diagnostic state)
+Publishes: /cmd_vel (to robot driver), /velocity_gate/state (diagnostic state),
+/velocity_gate/blocker (map-frame cloud closing a given-up passage in the global costmap)
 """
 import math
 import threading
 
 import rospy
+import tf2_ros
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import LaserScan
-from std_msgs.msg import String
+from nav_msgs.msg import Path
+from sensor_msgs.msg import LaserScan, PointCloud2
+from sensor_msgs import point_cloud2
+from std_msgs.msg import Header, String
+from std_srvs.srv import Empty
 from visualization_msgs.msg import Marker, MarkerArray
 
-from amr_navigation.gate_logic import DEFAULTS, GateLogic
+from amr_navigation.gate_logic import DEFAULTS, GateLogic, blocker_points, path_heading_error
 
 
 class VelocityGate:
@@ -31,14 +36,23 @@ class VelocityGate:
         self.last_state = None
         self.moving_out = False
         self.lock = threading.Lock()
+        self.map_frame = rospy.get_param("~map_frame", "map")
+        self.blocker_cloud = None   # stored map-frame points
+        self.blocker_until = 0.0
+        self.plan_xy, self.plan_t = [], 0.0   # latest global plan (map frame) for the GIVEUP rotation shim
+        self.tf_buf = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buf)
 
         self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
         self.state_pub = rospy.Publisher("/velocity_gate/state", String, queue_size=1, latch=True)
         self.shield_pub = rospy.Publisher("/velocity_gate/shields", MarkerArray, queue_size=1)
+        self.blocker_pub = rospy.Publisher("/velocity_gate/blocker", PointCloud2, queue_size=1)
         rospy.Subscriber("/scan", LaserScan, self.on_scan, queue_size=1)
+        rospy.Subscriber(rospy.get_param("~plan_topic", "/move_base/NavfnROS/plan"), Path, self.on_plan, queue_size=1)
         rospy.Subscriber("/cmd_vel_nav", Twist, self.on_cmd, queue_size=1)
         rospy.Timer(rospy.Duration(1.0 / self.rate), self.on_timer)
         rospy.Timer(rospy.Duration(0.1), self.publish_shields)
+        rospy.Timer(rospy.Duration(1.0), self.on_blocker_timer)
 
     def on_scan(self, msg):
         now = rospy.Time.now().to_sec()
@@ -49,6 +63,22 @@ class VelocityGate:
             a += msg.angle_increment
         with self.lock:
             self.logic.update_scan(pts, now)
+
+    def on_plan(self, msg):
+        self.plan_xy = [(ps.pose.position.x, ps.pose.position.y) for ps in msg.poses]
+        self.plan_t = rospy.Time.now().to_sec()
+
+    def heading_error(self, now):
+        """Bearing error to the new global path, or None if the plan is stale/missing or tf fails."""
+        if not self.plan_xy or now - self.plan_t > self.logic.p["shim_plan_age"]:
+            return None
+        try:
+            tf = self.tf_buf.lookup_transform(self.map_frame, self.base_frame, rospy.Time(0), rospy.Duration(0.05))
+        except Exception:
+            return None
+        t, q = tf.transform.translation, tf.transform.rotation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        return path_heading_error((t.x, t.y, yaw), self.plan_xy, self.logic.p["shim_lookahead"])
 
     def on_cmd(self, msg):
         self.cmd, self.cmd_t = msg, rospy.Time.now().to_sec()
@@ -72,8 +102,9 @@ class VelocityGate:
             return
 
         out = Twist()
+        herr = self.heading_error(now) if self.logic.state == "giveup" else None
         with self.lock:
-            out.linear.x, out.angular.z = self.logic.step(self.cmd.linear.x, self.cmd.angular.z, now)
+            out.linear.x, out.angular.z = self.logic.step(self.cmd.linear.x, self.cmd.angular.z, now, herr)
 
         if self.logic.state != self.last_state:
             why = " [%s]" % self.logic.reason if self.logic.state == "hold" else ""
@@ -81,6 +112,8 @@ class VelocityGate:
             rospy.loginfo("[gate] %s -> %s%s%s (fwd_gap: %.2fm)",
                           self.last_state, self.logic.state, why, info, self.logic.gap)
             self.state_pub.publish(String(self.logic.state))
+            if self.logic.state == "giveup":
+                self.set_blocker(now)
             self.last_state = self.logic.state
         else:
             # Throttled 1.0s live telemetry so console shows real-time state and velocities
@@ -89,6 +122,41 @@ class VelocityGate:
                                    self.logic.gap, self.logic.state, self.logic.scale, out.linear.x, out.angular.z, flank_str)
 
         self.publish(out)
+
+    def set_blocker(self, now):
+        """On GIVEUP: close the blocked passage in the global costmap so NavFn re-routes."""
+        try:
+            tf = self.tf_buf.lookup_transform(self.map_frame, self.base_frame, rospy.Time(0), rospy.Duration(0.2))
+        except Exception as e:
+            rospy.logwarn("[gate] blocker skipped, tf failed: %s", e)
+            return
+        t, q = tf.transform.translation, tf.transform.rotation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        c, s = math.cos(yaw), math.sin(yaw)
+        pts = [(t.x + c * x - s * y, t.y + s * x + c * y, 0.1)
+               for x, y in blocker_points(self.logic.gap, self.logic.p)]
+        self.blocker_cloud = pts
+        self.blocker_until = now + self.logic.p["blocker_ttl"]
+        mid = pts[len(pts) // 2]
+        rospy.loginfo("[gate] blocker set at (%.2f, %.2f) for %.0f s", mid[0], mid[1], self.logic.p["blocker_ttl"])
+
+    def on_blocker_timer(self, _):
+        if self.blocker_cloud is None:
+            return
+        now = rospy.Time.now().to_sec()
+        if now < self.blocker_until:
+            hdr = Header(stamp=rospy.Time.now(), frame_id=self.map_frame)
+            self.blocker_pub.publish(point_cloud2.create_cloud_xyz32(hdr, self.blocker_cloud))
+            return
+        if self.logic.state == "hold":
+            return  # clear only while not in HOLD (costmap reset is a short blind moment)
+        self.blocker_cloud = None
+        try:
+            rospy.wait_for_service("/move_base/clear_costmaps", timeout=0.5)
+            rospy.ServiceProxy("/move_base/clear_costmaps", Empty)()
+            rospy.loginfo("[gate] blocker expired, costmaps cleared")
+        except Exception as e:
+            rospy.logwarn("[gate] clear_costmaps failed: %s", e)
 
     def publish_shields(self, _):
         if self.shield_pub.get_num_connections() == 0:
