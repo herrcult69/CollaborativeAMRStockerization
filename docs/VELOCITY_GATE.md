@@ -1,14 +1,14 @@
 # Velocity Gate — algorithm and log reference
 
 Code: `catkin_ws/src/amr_navigation/scripts/velocity_gate.py` (ROS node) and
-`catkin_ws/src/amr_navigation/src/amr_navigation/gate_logic.py` (pure logic, tested by `tests/test_velocity_gate.py`).
-Companion node for costmap trails: `scripts/scan_clearing.py` (see [§8](#8-scan_clearing-companion-node)).
+`catkin_ws/src/amr_navigation/src/amr_navigation/gate_logic.py` (pure logic, tested by `tests/test_gate_logic.py` and
+`tests/test_gate_rates.py`). Companion node for costmap trails: `scripts/scan_clearing.py` (see [§8](#8-scan_clearing-companion-node)).
+Every parameter, with units and tuning recipes: [`TUNING.md`](TUNING.md).
 
-> **Status (current design).** The live gate is the dual-shield + spin-first design described in **section 2
-> (geometry)** and **section 9 (parameters)**: narrow inner stop rectangle, half-ellipse outer slow-down, optional flank
-> shield (off), crossing yield with odom-compensated tracking, and spin-first rotation toward the plan. The predictive
-> moving-obstacle machinery in sections 1 and 3-7 (`FreeSpaceDetector`, head-on / PASS / ESCAPE plans) was retired and is
-> kept only as history. Tests: `tests/test_gate_logic.py`.
+> **Current design.** Dual shield (narrow inner stop rectangle + half-ellipse outer slow-down), optional flank shield (off),
+> crossing yield with odom-compensated tracking, spin-first rotation toward the plan, TEB band monitor (S3b), and GIVEUP with a
+> global-costmap blocker. The older predictive machinery (`FreeSpaceDetector`, head-on / PASS / ESCAPE plans) is retired and
+> no longer in the code.
 
 ---
 
@@ -18,38 +18,36 @@ The velocity gate is a safety filter between move_base and the robot:
 
 ```
 move_base (TEB) ──/cmd_vel_nav──▶ velocity_gate ──/cmd_vel──▶ Unity robot
-                                      ▲
-                     /scan ───────────┤   (+ TF odom ← laser_link, for moving-obstacle detection)
+                                      ▲   ▲   ▲
+                     /scan ───────────┘   │   └── /odom (measured v, w), Navfn plan, TEB local_plan
+                                          └────── /velocity_gate/shields (RViz), /velocity_gate/state, /velocity_gate/blocker
 ```
 
-TEB decides *where* to go. The gate only decides *how fast* that command may be executed, given what the lidar
-sees right now. It reacts as follows:
+TEB decides *where* to go. The gate only decides *how fast* that command may be executed, given what the lidar sees right now.
 
 | Situation | Gate reaction |
 |---|---|
-| Static obstacle ahead in the robot's path | Slow down in proportion to the gap, stop 0.30 m from the nose, then **HOLD** |
-| **Head-on** moving obstacle on a collision course, within 1.5 m | **HOLD** immediately: `v = 0` **and** `w = 0`, whatever TEB asks |
-| **Side** (crossing) obstacle that keeping TEB's speed would avoid | nothing, keep going |
-| Side obstacle that would hit us, and passing at 0.32 m/s avoids it | **PASS**: drive at 0.32 m/s, even if TEB slowed down |
-| Side obstacle we can't pass, and stopping lets it cross in front | **HOLD** (`crossing`), but only once waiting any longer would be unsafe |
-| Side obstacle where stopping would leave us in its path | **ESCAPE**: pass anyway (also ends a HOLD) |
-
-The key distinction: **what kind of motion** (head-on vs side), and for side obstacles **which robot plan is
-predicted to be safe**. Head-on means yield. Side means continue, then pass, then stop, in that order. Stop is
-chosen only when it really keeps the robot out of the obstacle's path.
+| Static obstacle inside the outer half-ellipse | Slow down in proportion to the distance (never stops by itself) |
+| Obstacle inside the inner rectangle (<= 0.20 m from the nose) | **HOLD [blocked]**: `v = 0`, `w = 0` |
+| Compact obstacle moving sideways into the corridor ahead | **HOLD [crossing]**: `v = 0`, `w = 0`, whatever TEB asks |
+| Robot faces more than 60 deg away from the plan | **Spin-first**: rotate in place toward the plan |
+| HOLD lasts longer than `hold_timeout` (10 s) | **GIVEUP**: rotation allowed, forward blocked, blocker line sent to the global costmap |
+| TEB's trajectory is bent after an override | **S3b reinit**: TEB rebuilds its band from the Navfn plan |
+| Scan older than `scan_timeout` (0.5 s) | gate is blind, treated as blocked (HOLD [blocked]) |
 
 Important properties:
 
-- It only publishes while move_base is actively commanding (a `/cmd_vel_nav` message in the last 0.3 s). When
+- It only publishes while move_base is actively commanding (a `/cmd_vel_nav` message within `cmd_timeout`, 0.5 s). When
   move_base goes idle and the last output was not zero, it publishes **one zero Twist**, then stays silent, so the
-  robot is never left driving on a stale command.
+  robot is never left driving on a stale command. Docking/lift scripts publish `/cmd_vel` directly and are never touched by the gate.
 - The scan callback and the 20 Hz timer share the logic under a lock. If the timer step raises, the error is
   logged and a zero Twist is published; the timer keeps running.
-  Docking/lift scripts publish `/cmd_vel` directly and are never touched by the gate.
-- During HOLD the output is a fully zero Twist. TEB keeps planning and keeps sending swerve commands, but
-  none of them reach the robot. That is what stops the "stopped but weaving left/right" behaviour.
-- The lidar is a 180° arc mounted 0.33 m ahead of `drive_center`. Nothing beside or behind the laser is visible.
-  Moving obstacles that go out of view beside the robot are carried on their last velocity (coasting, §4).
+- During HOLD the output is a fully zero Twist (except the optional HOLD [blocked] rotation, §3). TEB keeps planning and sending
+  swerve commands, but none of them reach the robot. That is what stops "stopped but weaving left/right".
+- Decisions are counted in scans (`cross_confirm` = 3 scans = 0.3 s at 10 Hz) or in seconds, never in odom samples, so the odom
+  rate (20 or 50 Hz) and `step()` jitter do not change when a HOLD latches (`tests/test_gate_rates.py`).
+- The lidar is a 220 deg arc (361 rays, 10 Hz) mounted 0.33 m ahead of `drive_center`. Nothing behind or directly beside the
+  laser is visible; a crosser that leaves the arc is simply no longer seen.
 
 ---
 
@@ -115,289 +113,168 @@ Each scan, every valid return is converted to a point `(px, py)` in drive_center
 
 ---
 
-## 3. Moving-obstacle detection — `FreeSpaceDetector`
-
-The question is "is this return something that moved here?". The answer is a **free-space violation test**:
-
-1. Keep the last 1.5 s of scans together with the laser pose in `odom` at each scan's timestamp (from TF).
-2. For the current scan, pick a reference scan at least `moving_ref_age` = 0.4 s old.
-3. For each current return:
-   - Convert it to a world (odom) point.
-   - Look at it from the reference scan's laser pose: angle and distance `ρ`.
-   - Find the reference ray at that angle and its two neighbours, and take the **smallest** free distance among
-     the three (an `inf` reference ray counts as free up to `range_max`).
-   - If that free distance is `> ρ + moving_tol` (0.12 m), then 0.4 s ago the laser saw **through** this spot.
-     Something is there now that wasn't, so the return is flagged **moving**.
-
-Why this works:
-
-| Case | Reference ray at that spot | Flagged? |
-|---|---|---|
-| Static wall, robot driving or turning | hits the same spot (world frame cancels own motion) | no |
-| Obstacle coming toward the robot | used to pass through to the obstacle's old, farther position | **yes** |
-| Obstacle crossing the path | used to pass through to the wall behind | **yes** (leading edge) |
-| Obstacle moving away | the spot was hidden behind the obstacle itself | no |
-| Static surface newly revealed (passing a rack end) | the spot was hidden | no |
-
-Taking the minimum over three neighbouring reference rays stops a point right next to a static edge from being
-mistaken for motion. Sensitivity: anything faster than about `0.12 m / 0.4 s ≈ 0.3 m/s` is detected.
-
-If TF `odom ← laser_link` is missing for a scan, that scan only updates the static gap. Existing tracks keep
-coasting, and the pose is dead-reckoned on the gate's own output speed, so a single missed lookup doesn't abandon a
-pass. After `pose_timeout` (1.0 s) without a pose, all tracks are dropped and the gate is a distance-only gate
-(static rules only). It logs a warning ([§7](#7-log-reference)).
-
----
-
-## 4. Tracking moving obstacles — `GateLogic.update_scan`
-
-Each scan (needs the moving flags **and** the drive_center pose in odom):
-
-- **gap** = min `(px − nose_x)` over points with `|py| ≤ half_w`. This includes moving points, and drives the static rules.
-- **Clusters:** consecutive returns (scan order) closer than `seg_gap` = 0.25 m form a segment. A segment with
-  ≥ 2 moving returns is a moving obstacle. Its **visible bounding box** (centre, half sizes) is kept, and must lie
-  within 5 m ahead and 3.5 m to the side. For long (wall-like) segments, only the moving part is used.
-- **Tracks** live in odom. Each cluster is matched to the nearest predicted track within
-  `assoc_dist` (0.6 m) + its size, otherwise it starts a new track.
-  - **Velocity** is the **median** of the scan-to-scan steps of the box centre over the last 0.6 s. A one-off jump
-    (another face of the obstacle coming into view) therefore doesn't corrupt it.
-  - A box cut off at the edge of the lidar's view (`px ≈ laser_x`) only updates the track's **sideways**
-    position; its x position is kept on the prediction.
-  - **Coasting:** a track that should be visible but isn't seen for 0.5 s is dropped. A track predicted to be
-    beside or behind the laser (out of view) keeps coasting at its last velocity for up to 4 s. So a pass isn't
-    abandoned when the obstacle disappears beside the robot.
-- A track is used for decisions once it has ≥ 0.25 s of history and moves ≥ 0.15 m/s.
-- **Classification** by its own velocity `(ux, uy)` in the robot frame:
-  - `|uy| ≥ |ux|`: **SIDE** (crossing the path)
-  - `ux < 0`: **HEAD-ON** (coming toward the robot)
-  - otherwise (moving away): ignored, the static rules handle it
-
-## 5. Per-command decision — `GateLogic.step` (20 Hz)
-
-Inputs: TEB's `(v, w)`. Output: `(v_out, w_out)`.
-
-### 5.1 Front speed target (static obstacles)
+## 3. Per-command decision — `GateLogic.step` (20 Hz)
 
 ```
-d_slow = d_stop + max(v, 0.05) · horizon_s           (v = 0.25 → 0.30 + 0.625 = 0.925 m)
-target = clamp((gap − d_stop) / (d_slow − d_stop), 0, 1)
+              flank breach / crossing / blocked
+   FREE ───────────────────────────────────────▶ HOLD ──── hold_timeout (10 s) ────▶ GIVEUP
+     ▲                                             │                                    │
+     └──────── corridor clear for clear_time ──────┴────────────────────────────────────┘
 ```
 
-Example at v = 0.25: gap 0.925 m or more → 1.0 (full speed); gap 0.60 → 0.48; gap ≤ 0.30 → 0.
+**Front speed target** (every step, before the state machine). With `gap` = nose-to-nearest-return distance inside the inner
+rectangle and `e` = normalised outer-shield distance (§2):
 
-If the scan is older than 0.5 s (**blind**), `target = 0`: forward motion is blocked, but there is no HOLD.
-
-### 5.2 Moving obstacles — predict three plans
-
-For each usable track, the robot is predicted to drive straight for 7 s (`predict_s`) under three plans:
-
-| Plan | Robot travel `s(t)` |
+| Condition | Target scale |
 |---|---|
-| **continue** | `v · t` (TEB's speed) |
-| **pass** | `v_pass · t`, with `v_pass = 0.32 · front_target(0.32)` (no passing into a static obstacle) |
-| **stop** | `min(v_now · t, b)`, with `b = v_now·0.3 + v_now² / (2·0.5)` (latency + braking) |
+| scan stale, or `gap <= d_inner` | 0 |
+| `e <= d_outer` | `scale_min + (1 - scale_min) * (e - d_inner) / (d_outer - d_inner)`, clamped to 0..1 |
+| otherwise | 1 |
 
-The obstacle box moves at its velocity. The **clearance** of a plan is the smallest gap between the footprint
-(corridor width) and the box along the whole horizon; a negative value is the overlap depth. A plan is **safe**
-when
+**FREE.** Braking is immediate; speeding up is limited to `release_rate` per second (about 1 s from 0 to full speed). While
+moving forward the output never drops below `min_crawl_speed` (0.10 m/s, avoids stalling on PhysX friction), and `w` is scaled by
+the same factor as `v`, so TEB's curvature is kept; a pure rotation (`v <= 0.02`) passes unchanged. With nothing in the outer
+shield the gate is transparent. Leaving FREE, in this priority: flank breach, then crossing, then blocked (`target_scale <= 0`
+or `gap <= d_hold_static`).
 
-```
-clearance > margin = obs_pad (0.1 m) + obstacle speed · time_margin (0.3 s)
-```
+**HOLD.** Output `v = 0`. `w = 0` as well, with one exception: **HOLD [blocked]** may rotate toward the plan at `spin_w` after
+`spin_hold_delay` (2 s), so the robot can turn out of a dead end; the rotation follows the plan heading, not TEB's `w`, so there
+is no pivot-release-pivot loop. HOLD [crossing] and [flank] are a full freeze.
 
-**Decision**, only for tracks where *continue* is not safe:
+**Release.** HOLD or GIVEUP returns to FREE when, for `clear_time` (0.8 s) without interruption, the scan is fresh, `gap >
+max(d_inner, d_hold_static) + clear_margin` (0.30 m), there is no flank breach and no crossing threat. Any interruption restarts
+the 0.8 s.
 
-```
-HEAD-ON:  within yield_dist (1.5 m) ahead of the nose     → HOLD "moving"
-          further away                                    → nothing yet (static rules slow us)
+**Spin-first (FREE).** A fresh Navfn plan with more than `spin_min_remaining` left and a heading error above `spin_enter` (60 deg)
+makes the gate output `v = 0`, `w = +/- spin_w` until the error drops below `spin_exit` (20 deg). Details in §2.
 
-SIDE:     0. already passing it: until it is behind the fork tips by the margin
-             (or has crossed and moves away), keep PASS while pass clearance > 0
-          1. pass safe                                               → PASS
-          2. continue 0.5 s more, then stop, is still safe         → nothing yet (defer the stop)
-          3. stop safe                                             → HOLD "crossing"
-          4. none safe: stop clearance > pass clearance            → HOLD "crossing"
-                        otherwise (ties too)                       → ESCAPE (pass anyway)
-```
-
-The ingredients that fix "stops and gets hit":
-
-- **Pass is absolute** (only while TEB commands forward, `v > 0`). The gate drives at `max(TEB v, v_pass)`, with
-  `|w|` clipped to 0.2 rad/s. A zero (goal reached or cancelled), rotate-in-place or reverse command is never turned
-  into a pass
-  (drive through, don't swerve). TEB slowing down for the obstacle can't stall the robot in its path.
-- **Commitment is physical.** Once passing an obstacle, the robot keeps passing until that obstacle is behind the
-  fork tips (x = −0.54) by the margin, or has crossed the path and is moving away. It doesn't stop when TEB's speed
-  is merely *predicted* to be enough, so the chassis and the forks both get past. It never stops halfway, as long
-  as passing doesn't collide.
-- **Stop must be earned.** A HOLD for a side obstacle needs a stop plan that keeps clearance. If stopping would leave
-  the robot in the path, it escapes instead, and an ESCAPE also ends a HOLD that is already running.
-- **No premature stop.** It only yields when stopping 0.5 s later would no longer be safe.
-- **Side obstacles never trigger the head-on rule**, even when their edge enters the corridor during a pass.
-
-Example (closed-loop sim, `tests/gate_sim.py`): a box crossing at world x = 1.2 m, starting 3.5 m to the side at
-0.4 m/s, robot at 0.25 m/s. Keeping 0.25 m/s collides. The gate predicts the pass plan to be safe, drives 0.32 m/s,
-and clears the box without stopping.
-
-### 5.3 State machine
-
-```
-                     moving obstacle ≤ yield_dist           ─┐
-          ┌───────── or forward command with target ≤ 0      ├─▶ reason: moving / blocked / crossing
-          │          or side conflict must-yield           ─┘
-          ▼
-  ┌──────────┐                       ┌──────────┐   held > hold_timeout (20 s)   ┌──────────┐
-  │   FREE   │──────────────────────▶│   HOLD   │───────────────────────────────▶│  GIVEUP  │
-  └──────────┘                       └──────────┘                                └──────────┘
-       ▲   ▲   corridor clear for clear_time (1 s)      │                              │
-       │   └────────────────────────────────────────────┘                              │
-       └──────────────── corridor clear for clear_time (1 s) ──────────────────────────┘
-```
-
-**Entering HOLD** (only from FREE):
-
-| Reason | Condition | Note |
-|---|---|---|
-| `moving` | head-on track on a collision course within `yield_dist` (1.5 m) | any command, including rotate-in-place |
-| `crossing` | side track, the decision says stop | |
-| `blocked` | `v > 0`, not blind, `target ≤ 0` (gap ≤ 0.30 m) | static; only when TEB drives forward into it |
-
-**"Corridor clear"** means all of the following:
-
-- the scan is fresh;
-- `gap > d_stop + clear_margin` (0.45 m);
-- no moving-obstacle hold reason, evaluated without deferring (while holding, *continue* itself must be safe).
-
-The clear timer restarts whenever any of these fails. **ESCAPE** leaves HOLD/GIVEUP immediately.
-
-**Output per state:**
-
-| State | `v_out` | `w_out` |
-|---|---|---|
-| HOLD | 0 | **0** |
-| PASS / ESCAPE (`v > 0`) | `max(v, v_pass)` | `w` clipped to ±0.2 |
-| any, `v ≤ 0` (rotate / reverse) | `v` | `w` (not gated) |
-| GIVEUP | 0 unless the corridor is clear, then `v·scale` | `w` (TEB may rotate and reroute) |
-| FREE | `v·scale` | `w` |
-
-**Scale ramp:**
-
-- Braking (target < 1) is applied **immediately**.
-- Speeding up is limited to `release_rate` = 0.8 per second. From 0 to full speed takes about 1.25 s.
-
-### 5.4 Why GIVEUP exists
-
-While the gate holds, move_base sees no progress. If the hold outlasted move_base's `oscillation_timeout` (60 s)
-or `controller_patience` / `planner_patience` (`nav_patience`, 30 s), move_base would abort the goal. So after
-`gate_hold_timeout` (20 s) the gate stops holding:
-
-- rotation and reversing pass through again, so TEB can find another way;
-- forward motion stays blocked until the corridor is clear.
-
-`tests/test_velocity_gate.py::LaunchContractTest` enforces `gate_hold_timeout + 5 < oscillation_timeout` and
-`< nav_patience`.
+**S3b TEB band monitor.** Any override (HOLD, spin, GIVEUP) bends TEB's warm-started band while the wheels are held. After an
+override of at least `reinit_min_override` (0.5 s), or after `reinit_confirm` bad local plans, the gate sets TEB's
+`force_reinit_new_goal_dist` to 0.0 for `reinit_hold` (0.4 s) and outputs zero. Details in §2.
 
 ---
 
-## 6. Typical scenarios
+## 4. GIVEUP and the timeout rule
+
+While the gate holds, move_base sees no progress. If the hold outlasted move_base's patience or oscillation timeout it would abort
+the goal, so after `hold_timeout` the gate stops holding:
+
+- **Forward stays blocked** (`v = 0`) until the corridor is clear; rotation passes through again so TEB can find another way.
+  Angular output is limited to `giveup_w_max` (0.30 rad/s). With a fresh plan the gate rotates toward it until the heading error
+  is below `shim_tol` (0.15 rad), then outputs `w = 0`; without a plan it passes TEB's `w`, clamped.
+- On entering GIVEUP the node publishes a blocker line (`blocker_half_width` 0.60 m, spacing 0.05 m) across the passage on
+  `/velocity_gate/blocker` for `blocker_ttl` (60 s). The global costmap's `blocker_layer` marks it, so Navfn plans around
+  whatever blocks the aisle. When the blocker expires the costmaps are cleared (`[gate] blocker expired, costmaps cleared`).
+- GIVEUP ends (`-> free`) when the corridor has been clear for `clear_time`.
+
+**Timeout rule:** `gate_hold_timeout` < `nav_patience` (controller and planner patience) < `oscillation_timeout`.
+Defaults: 10 s < 30 s < 60 s, set in `warehouse_navigation.launch`. If you raise `gate_hold_timeout`, raise the other two with it.
+
+---
+
+## 5. Typical scenarios
 
 | Scenario | What happens |
 |---|---|
-| Person walks toward the robot | Head-on track, collision course, ≤ 1.5 m → `free -> hold [moving]`, completely still. They pass beside the robot → after 1 s `hold -> free` |
-| Person walks toward the robot but offset, passing beside | continue is safe → nothing, no stop |
-| Person walks up and stops 1 m in front | HOLD `[moving]`. Once they stand still they're not tracked as moving → static rules: slow, `hold [blocked]` at 0.30 m → after 20 s `giveup`, TEB may go around |
-| Cart crosses far ahead, or will be past before we get there | continue is safe → nothing |
-| Cart crosses where we would meet it; passing at 0.32 clears | `side obstacle: pass at 0.32 m/s`, no stop |
-| Cart crosses close ahead, can't be passed | keeps driving until stopping is due, then `hold [crossing]`; it crosses in front, then release |
-| Cart would hit the robot even if it stopped | `side obstacle: escape ...`: drive through |
-| End of an aisle (wall) | static: slows, TEB's turns still pass; HOLD only if it drives forward into 0.30 m |
+| Person walks across the aisle ahead, inside 0.9 m of the nose | About 0.25 s of track baseline plus 3 confirming scans, then `free -> hold [crossing]`, completely still. After they leave and the corridor stays clear for 0.8 s: `hold -> free`, ramping back up |
+| Person walks along the aisle, away from the robot | lateral speed below `cross_v_min`: nothing |
+| Person stands still in the aisle ahead | Slows inside the outer ellipse, `hold [blocked]` at 0.20 m; after 2 s the gate may rotate toward the plan; after 10 s `giveup`, blocker line, TEB goes around |
+| Aisle wall 0.42 m abeam | Outer shield slows the robot by about 15 %; no HOLD |
+| Rack beside the robot while it turns or drives | Not a crosser: tracks are compensated with measured odom, and detection is skipped while `\|w\| > cross_w_max` |
+| Cluster longer than 0.80 m (wall, rack face, wide cart) | Not tracked as a crosser; handled by the shields only |
+| Robot ends a goal facing away from the next plan | `spin start`, rotates in place, `spin stop` |
+| TEB band bent after a HOLD or spin | `teb reinit (override end)` or `(bulge ...)` / `(detour ...)` / `(cusp)` |
+| Lidar stops or lags | After 0.5 s the gate counts as blind: `hold [blocked]` until scans resume and the corridor is clear for 0.8 s |
 
-## 7. Log reference
+---
 
-All gate logs are prefixed `[gate]` and come from `velocity_gate` (`output="screen"` in
-`warehouse_navigation.launch`). The current state is also published, latched, on `/velocity_gate/state`
-(`free` / `hold` / `giveup`), e.g. `rostopic echo /velocity_gate/state`.
+## 6. Log reference
 
-### 7.1 State change — INFO, once per change
+All gate logs are prefixed `[gate]` and come from `velocity_gate` (`output="screen"` in `warehouse_navigation.launch`). The current
+state is also published, latched, on `/velocity_gate/state` (`free` / `hold` / `giveup`).
+
+### 6.1 State change — INFO, once per change
 
 ```
-[gate] <old> -> <new>[ [reason]] (gap <G>m, head-on <H>m, tracks <N>)
+[gate] <old> -> <new>[ [reason]][ (spin)][ | <trigger>] (fwd_gap: <G>m)
 ```
 
 | Field | Meaning |
 |---|---|
 | `<old>` | previous state; `None` on the first command after the node starts |
 | `<new>` | `free`, `hold` or `giveup` |
-| `[reason]` | only on transitions **into** `hold`: `[moving]`, `[blocked]` or `[crossing]` |
-| `gap <G>m` | nose → nearest return in the corridor at that moment; `infm` = nothing in the corridor |
-| `head-on <H>m` | nose → nearest head-on obstacle on a collision course; `infm` = none |
-| `tracks <N>` | number of moving obstacles currently tracked (including coasting ones) |
-
-Examples and how to read them:
+| `[reason]` | only on transitions into `hold`: `[blocked]`, `[crossing]` or `[flank]` |
+| `<trigger>` | what caused it: `clear`, `blocked ahead at gap ...`, `slowdown ahead at outer distance ...`, `yield: crossing obstacle at (x, y) vy=...`, `flank breach at ...`, `spin toward plan ...` |
+| `fwd_gap` | nose to nearest return in the inner rectangle; `infm` = nothing there |
 
 | Log line | Meaning |
 |---|---|
-| `[gate] None -> free (gap 3.63m, head-on infm, tracks 0)` | first command received; corridor clear for 3.6 m |
-| `[gate] free -> hold [moving] (gap 1.53m, head-on 1.50m, tracks 1)` | head-on obstacle on a collision course at 1.5 m → yield completely still |
-| `[gate] free -> hold [blocked] (gap 0.29m, head-on infm, tracks 0)` | static obstacle reached the 0.30 m stop line while TEB was driving forward |
-| `[gate] free -> hold [crossing] (gap infm, head-on infm, tracks 1)` | side obstacle can't be passed; stopping now lets it cross in front |
-| `[gate] hold -> free (...)` | clear for 1 s (or an escape); ramping back up |
-| `[gate] hold -> giveup (gap 0.28m, ...)` | held for 20 s; TEB may rotate/reverse now, forward still blocked |
-| `[gate] giveup -> free (...)` | corridor finally clear for 1 s |
+| `[gate] None -> free \| clear (fwd_gap: infm)` | first command received; nothing ahead |
+| `[gate] free -> hold [blocked] \| blocked ahead at gap 0.19m (fwd_gap: 0.19m)` | something reached the inner rectangle |
+| `[gate] free -> hold [crossing] \| yield: crossing obstacle at (0.80, 0.45) vy=-0.50 (fwd_gap: infm)` | lateral mover entering the corridor; `(x, y)` is in `drive_center`, `vy` in m/s |
+| `[gate] hold -> free \| clear (...)` | clear for 0.8 s; ramping back up |
+| `[gate] hold -> giveup \| ...` | held longer than `hold_timeout`; rotation allowed, forward blocked |
+| `[gate] giveup -> free \| ...` | corridor finally clear for 0.8 s |
 
-States persist while move_base is idle: after one zero Twist the gate goes silent, but it does not reset. So after a pause, the next line
-starts from whatever state it was in before.
+States persist while move_base is idle: after one zero Twist the gate goes silent but does not reset.
 
-### 7.2 Slowing — INFO, at most once per second
+### 6.2 Telemetry — INFO, at most once per second (when the state did not change)
 
 ```
-[gate] gap <G>m -> scale <S>
+[gate] gap: 0.60m | outer: 0.74m | state: free | scale: 0.48 | v_out: 0.17m/s, w_out: 0.00rad/s
 ```
 
-Printed while the output speed is reduced (`scale < 0.99`) and the robot still moves forward. `S` is the fraction of
-TEB's speed actually sent. It is **not** printed during HOLD, during GIVEUP with forward blocked, or when
-the scan is stale, because the output speed is 0 then.
+`gap` is the inner-rectangle distance, `outer` the normalised outer-shield distance, `scale` the fraction of TEB's speed sent.
+`(spin)` follows the state while spinning. `scale` rising from a low value with nothing close is the ramp-up after a hold.
 
-| Example | Meaning |
+### 6.3 Spin, reinit and blocker lines
+
+| Log | Meaning |
 |---|---|
-| `[gate] gap 0.60m -> scale 0.48` | slow zone: 0.30 m left before the stop line, half speed |
-| `[gate] gap 3.20m -> scale 0.55` | nothing close: this is the **ramp-up** after a hold or slowdown (0.8 per second) |
+| `[gate] spin start (heading error 94 deg)` / `spin stop (...)` | spin-first began / ended; `n/a` means no fresh plan |
+| `[gate] teb reinit (override end)` | an override of >= 0.5 s ended; TEB is told to rebuild its band |
+| `[gate] teb reinit (bulge 0.62m)` / `(detour x1.9)` / `(cusp)` | the band monitor found a bad local plan (twice in a row) |
+| `[gate] teb reinit end` | reinit window over, TEB's old setting restored |
+| `[gate] blocker set at (x, y) for 60 s` | GIVEUP put a blocker line in the global costmap |
+| `[gate] blocker expired, costmaps cleared` | blocker removed, costmaps cleared |
 
-### 7.3 Side obstacle decision — INFO, once per change
-
-```
-[gate] side obstacle: pass at <V> m/s (TEB asked <T>)
-[gate] side obstacle: escape at <V> m/s (TEB asked <T>) - stopping would leave us in its path
-[gate] side obstacle: pass done (<why>)
-```
-
-| Example | Meaning |
-|---|---|
-| `side obstacle: pass at 0.32 m/s (TEB asked 0.25)` | continuing would collide, passing is predicted safe → speeding up |
-| `side obstacle: pass at 0.32 m/s (TEB asked 0.05)` | TEB slowed for the obstacle; the gate overrides that so the robot doesn't stall in its path |
-| `side obstacle: escape at 0.32 m/s ...` | neither passing nor stopping is safe; standing still is worse |
-| `side obstacle: pass done (forks 0.25 m past it)` | the obstacle is behind the fork tips by the margin; back to TEB's speed |
-| `side obstacle: pass done (it has crossed)` | it finished crossing the path and is moving away |
-| `side obstacle: pass done (TEB stopped)` | TEB commanded zero / rotate / reverse; a pass never overrides that |
-| `side obstacle: pass done (holding)` / `(no longer needed)` | another obstacle made it hold, or the track vanished |
-
-A `hold [crossing]` while a pass is running never happens: a pass continues as long as it keeps any clearance.
-
-### 7.4 Warnings
+### 6.4 Warnings and errors
 
 | Log | Meaning / action |
 |---|---|
-| `[gate] no odom pose, moving-obstacle yield off: <tf error>` (WARN, every 5 s) | TF `odom → laser_link` at the scan stamp is missing. Tracks coast on a dead-reckoned pose for up to 1 s, then moving-obstacle tracking (head-on hold, side pass/yield) is off; the static rules still work. Check Unity odom/TF, `laser_tf.launch`, `/use_sim_time` |
-| `[gate] error, publishing zero: <exception>` (ERROR, every 1 s) | a bug or bad input raised inside the timer step. The robot is sent zero every tick while it persists; report the exception |
+| `[gate] TEB reinit unavailable (<ns>): <error>` (WARN, every 10 s) | the TEB dynamic_reconfigure server is not there yet; the band monitor only warns. Check move_base is running, or set `reinit_enable: false` |
+| `[gate] TEB reinit reconfigure failed: <error>` (WARN) | the reconfigure call failed; TEB keeps its previous setting |
+| `[gate] blocker skipped, tf failed: <error>` (WARN) | no TF for the blocker pose; GIVEUP still rotates, but the global costmap is not told |
+| `[gate] clear_costmaps failed: <error>` (WARN) | the costmap clear service call failed after the blocker expired |
+| `[gate] error, publishing zero: <exception>` (ERROR, every 1 s) | a bug or bad input raised inside the timer step. Zero is sent every tick while it persists; report the exception |
 
-### 7.5 Silent cases worth knowing
+### 6.5 Silent cases worth knowing
 
 | Symptom | Likely cause |
 |---|---|
-| Robot doesn't move forward, no `[gate]` line at all | `/scan` older than 0.5 s (blind): forward is blocked without HOLD or log. Check `rostopic hz /scan` |
 | No gate output at all | move_base isn't publishing `/cmd_vel_nav` (idle, or the goal was aborted) |
-| Robot weaves while `/velocity_gate/state` is `free` | the obstacle is static, or slower than about 0.3 m/s, so not flagged moving (`tracks 0`); or it is beyond 1.5 m; or it will pass beside us. Tune `yield_dist`, `~moving_tol`, `~moving_ref_age` |
-| Robot stops for a side obstacle that would have missed | the clearance margin is too big for that obstacle: lower `obs_pad` / `time_margin` |
+| Robot stuck in `hold [blocked]` with nothing visible | `/scan` older than 0.5 s; check `rostopic hz /scan` |
+| Robot yields to a rack or wall | crossing false positive; see the recipes in `TUNING.md` (`cross_check_dist`, `cross_v_min`, `cross_max_extent`) |
+| Robot does not yield to a person | person is outside `cross_check_dist`, slower than `cross_v_min`, wider than `cross_max_extent`, or not seen (lidar layer / height); see `TROUBLESHOOTING.md` |
+
+---
+
+## 7. RViz marker legend (`/velocity_gate/shields`, namespace `shields`)
+
+The drawing is generated from the same parameters as the logic. Colours are RGB(A) as published.
+
+| Id | Type | What it shows | Colours |
+|---|---|---|---|
+| 0 | text billboard | state summary above the robot | green `CLEAR`, amber `SLOW (n%)`, red `HOLD [...]` / `YIELD (crossing)`, cyan `SPIN`, purple `GIVEUP / REROUTE` |
+| 1 | cube | inner shield rectangle (`d_inner` deep) | bright red = blocked, magenta = crossing hold, faint red otherwise |
+| 2 | triangle fan | outer half-ellipse fill | orange = slowing, dark amber = HOLD, yellow = idle |
+| 3, 4 | cubes | flank boxes, only when `flank_enable` | magenta = breach, blue otherwise; removed when disabled |
+| 5 | - | **unused on purpose** (renumbering would leave stale markers in saved RViz sessions) | - |
+| 6 | sphere | the crossing object, only while HOLD [crossing] | magenta |
+| 7 | line strip | crossing watch zone outline (`cross_x_max` x `cross_zone_w`) | cyan = watching, magenta = yielding |
+| 8 | line strip | outer ellipse rim | same colour as marker 2 |
+| 9 | flat cube | translucent fill of the watch zone | same colours as marker 7 |
+| 10 | line strip | check arc: threats only count inside `cross_check_dist` of the nose centre | same colours as marker 7; removed when the radius is beyond the zone |
 
 ---
 
@@ -428,6 +305,7 @@ beside or behind the robot. If AMCL is off and rack marks next to the robot get 
 ## 9. Parameters
 
 Gate parameters are set on the node as `~<name>`. Logic parameters come from `gate_logic.DEFAULTS`.
+Full list with units, side effects and tuning recipes: [`TUNING.md`](TUNING.md).
 
 | Param | Default | Effect |
 |---|---|---|

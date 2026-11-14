@@ -34,6 +34,21 @@ def make_cluster(center_x, center_y, n_pts=3, spacing=0.03):
     return [(center_x, center_y - half + i * spacing) for i in range(n_pts)]
 
 
+# Crossing-test coordinates (robot frame, metres)
+CROSSER_X = 0.8             # crosser column, inside cross_check_dist (0.9 m) of the nose
+CROSSER_Y0 = 0.75           # crosser starts here, left of the centreline, and sweeps toward it
+AWAY_START = (1.2, 1.0)     # cluster that moves away from the centreline
+
+
+def make_cluster_scan(gate, x, y, t, v=0.0, w=0.0, vw=None):
+    """Feed one boundary-padded cluster scan plus one step(v, w). Returns (state, v_out, w_out).
+    Boundary points keep the single test cluster from touching the scan edges."""
+    pts = [(0.0, -3.0)] + make_cluster(x, y) + [(0.0, 3.0)]
+    gate.update_scan(pts, t, vw=vw)
+    vo, wo = gate.step(v, w, t)
+    return gate.state, vo, wo
+
+
 class TestDualShieldGateLogic(unittest.TestCase):
     def setUp(self):
         # Instantiate gate with measured warehouse AMR parameters
@@ -235,29 +250,15 @@ class TestDualShieldGateLogic(unittest.TestCase):
 
 class TestCrossingYield(unittest.TestCase):
     def setUp(self):
-        # Pin baseline crossing parameters from initial implementation
-        self.gate = GateLogic(
-            min_cluster_pts=3,
-            d_outer=1.20,
-            cross_confirm=2,
-            cross_max_extent=999.0,
-            cross_w_max=999.0,
-        )
+        self.gate = GateLogic(min_cluster_pts=3, cross_confirm=2)
 
     def _run(self, path, v=0.0, w=0.0, n=None, t0=0.0, dt=0.1):
         """Feed one cluster per scan; path is a list of (x, y). Returns list of (state, v_out, w_out)."""
-        out = []
-        for i, (x, y) in enumerate(path[:n]):
-            t = t0 + i * dt
-            # Provide boundary points so single test cluster does not touch scan edges
-            pts = [(0.0, -3.0)] + make_cluster(x, y) + [(0.0, 3.0)]
-            self.gate.update_scan(pts, t)
-            vo, wo = self.gate.step(v, w, t)
-            out.append((self.gate.state, vo, wo))
-        return out
+        return [make_cluster_scan(self.gate, x, y, t0 + i * dt, v=v, w=w)
+                for i, (x, y) in enumerate(path[:n])]
 
     def test_crossing_toward_centreline_holds(self):
-        path = [(0.8, 0.75 - 0.05 * i) for i in range(6)]   # inside cross_check_dist (0.9 m) from the start
+        path = [(CROSSER_X, CROSSER_Y0 - 0.05 * i) for i in range(6)]   # inside cross_check_dist (0.9 m) from the start
         res = self._run(path, v=0.35, n=5)   # 0.25 s baseline needed, then 2 confirming scans
         self.assertEqual(res[-1][0], HOLD)
         self.assertEqual(self.gate.reason, "crossing")
@@ -265,7 +266,7 @@ class TestCrossingYield(unittest.TestCase):
         self.assertIn("yield: crossing", self.gate.trigger_info)
 
     def test_moving_away_stays_free(self):
-        path = [(1.2, 1.0 + 0.05 * i) for i in range(6)]
+        path = [(AWAY_START[0], AWAY_START[1] + 0.05 * i) for i in range(6)]
         res = self._run(path, v=0.35)
         self.assertTrue(all(r[0] == FREE for r in res))
 
@@ -290,16 +291,14 @@ class TestCrossingYield(unittest.TestCase):
         self.assertFalse(self.gate.crossing)
 
     def test_releases_after_clear_time(self):
-        cross = [(0.8, 0.75 - 0.1 * i) for i in range(12)]  # 1.0 m/s sweep toward the centreline
+        cross = [(CROSSER_X, CROSSER_Y0 - 0.1 * i) for i in range(12)]  # 1.0 m/s sweep toward the centreline
         self._run(cross[:6], v=0.0)
         self.assertEqual(self.gate.state, HOLD)
         # obstacle exits on the other side, then scene empties
         t = 0.6
         exit_path = [(1.2, -0.8 - 0.1 * i) for i in range(3)]
         for x, y in exit_path:
-            pts = [(0.0, -3.0)] + make_cluster(x, y) + [(0.0, 3.0)]
-            self.gate.update_scan(pts, t)
-            self.gate.step(0.35, 0.0, t)
+            make_cluster_scan(self.gate, x, y, t, v=0.35)
             t += 0.1
         self.assertEqual(self.gate.state, HOLD)  # clear_time not yet elapsed
         for _ in range(12):
@@ -309,7 +308,7 @@ class TestCrossingYield(unittest.TestCase):
         self.assertEqual(self.gate.state, FREE)
 
     def test_single_scan_jitter_ignored(self):
-        path = [(0.8, 0.75), (0.8, 0.75), (0.8, 0.45), (0.8, 0.75), (0.8, 0.75)]
+        path = [(CROSSER_X, CROSSER_Y0)] * 2 + [(CROSSER_X, 0.45)] + [(CROSSER_X, CROSSER_Y0)] * 2
         res = self._run(path, v=0.35)
         self.assertTrue(all(r[0] == FREE for r in res))
 
@@ -708,9 +707,7 @@ class TestCrossingRobustness(unittest.TestCase):
     """S2: odom-compensated ego-motion, 0.4 s velocity baseline, own watch-zone depth."""
 
     def _scan(self, gate, x, y, t, vw=None):
-        pts = [(0.0, -3.0)] + make_cluster(x, y) + [(0.0, 3.0)]
-        gate.update_scan(pts, t, vw=vw)
-        gate.step(0.0, 0.0, t)
+        make_cluster_scan(gate, x, y, t, vw=vw)
 
     def test_static_cluster_while_yawing_uses_measured_odom(self):
         """Commanded w is 0 (stale), measured w is 0.4 rad/s: the static rack must not read as crossing."""
@@ -728,7 +725,7 @@ class TestCrossingRobustness(unittest.TestCase):
     def test_real_crosser_detected_within_half_second(self):
         gate = GateLogic()
         for i in range(6):   # 0.5 m/s toward the centreline
-            self._scan(gate, 0.8, 0.75 - 0.05 * i, i * 0.1, vw=(0.0, 0.0))
+            self._scan(gate, CROSSER_X, CROSSER_Y0 - 0.05 * i, i * 0.1, vw=(0.0, 0.0))
             if gate.crossing:
                 break
         self.assertTrue(gate.crossing)

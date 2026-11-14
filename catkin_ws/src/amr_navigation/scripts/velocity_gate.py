@@ -258,6 +258,8 @@ class VelocityGate:
         except Exception as e:
             rospy.logwarn("[gate] clear_costmaps failed: %s", e)
 
+    # Marker ids: 0 text, 1 inner, 2 outer, 3/4 flanks, 6 crossing sphere, 7 zone, 8 rim, 9 zone fill, 10 check arc.
+    # Id 5 is intentionally unused: renumbering would leave stale markers in saved RViz sessions.
     def _marker(self, mid, mtype, stamp, z=0.0):
         m = Marker()
         m.header.frame_id = self.base_frame

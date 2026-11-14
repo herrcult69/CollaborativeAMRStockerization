@@ -13,6 +13,8 @@
        < controller/planner patience. After the hold the gate stops holding (TEB may rotate/reroute). -->
   <arg name="gate_hold_timeout" default="10.0" />
   <arg name="nav_patience" default="30.0" doc="controller_patience and planner_patience; keep > gate_hold_timeout" />
+  <!-- smooth: 10 Hz TEB + 5x5 m local costmap. laptop: the earlier low-CPU values (5 Hz, 8x8 m). See docs/TUNING.md. -->
+  <arg name="perf" default="smooth" doc="smooth or laptop" />
   <node pkg="move_base" type="move_base" name="move_base" output="screen">
     <rosparam command="load" file="$(find amr_navigation)/config/costmap_common.yaml" ns="global_costmap" />
     <rosparam command="load" file="$(find amr_navigation)/config/robot_$(arg robot_profile).yaml" ns="global_costmap" />
@@ -24,12 +26,14 @@
     
     <param name="base_local_planner" value="teb_local_planner/TebLocalPlannerROS" />
     <rosparam command="load" file="$(find amr_navigation)/config/teb_warehouse.yaml" ns="TebLocalPlannerROS" />
-    
+    <!-- Perf profile: loaded after every base config on purpose so it overrides them. Sets controller_frequency too. -->
+    <rosparam command="load" file="$(find amr_navigation)/config/perf_$(arg perf).yaml" />
+
     <param name="base_global_planner" value="navfn/NavfnROS" />
     <!-- <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" /> -->
     <param name="NavfnROS/allow_unknown" value="false" />
-    <param name="controller_frequency" value="5.0" />
-    
+    <!-- controller_frequency comes from config/perf_$(arg perf).yaml -->
+
     <!-- NavFn redraw the route 1/ sec -->
     <param name="planner_frequency" value="1.0" /> 
     

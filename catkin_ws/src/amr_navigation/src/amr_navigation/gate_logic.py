@@ -162,15 +162,6 @@ def band_health(local_xy, global_xy, p):
     return False, ""
 
 
-class FreeSpaceDetector:
-    """Lightweight stub kept for backward-compatibility with velocity_gate.py imports."""
-    def __init__(self, ref_age=0.4, tol=0.12):
-        pass
-
-    def update(self, ranges, angle_min, angle_increment, range_min, range_max, pose, now):
-        return None
-
-
 class GateLogic:
     def __init__(self, **overrides):
         self.p = dict(DEFAULTS)

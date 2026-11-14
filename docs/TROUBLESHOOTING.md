@@ -18,6 +18,10 @@ The project uses a differential-drive autonomous mobile robot (AMR) with a verti
 
 The current repository follows **Windows 11 + native Unity + Dockerized ROS 1 Noetic**. Earlier ROS 2 Humble, Nav2, Distrobox, and micro-ROS instructions in `report_week1.tex` and `PROJECT_KICKOFF.docx` describe a previous plan. They should not be mixed into this setup.
 
+> **Legacy (Milestone 1).** This guide was written for the Milestone 1 setup. Statements here that `move_base.launch` selects DWA
+> (sections 1.1, 2.2, 3.1 and 5) describe that launch file only. The current stack is `warehouse_navigation.launch` (TEB planner,
+> `velocity_gate`, AMCL); its problems are in [section 6.4](#64-navigation-and-performance-milestone-3-stack).
+
 ### 1.1 What is available now
 
 | Component | Evidence in the repository | Meaning for setup |
@@ -376,6 +380,22 @@ Source files and build outputs in the bind-mounted workspace remain on Windows. 
 STM32/ESP32, physical LiDAR, and rosserial are roadmap items, not prerequisites for the simulation setup. Standard ROS interfaces can reduce the amount of navigation code changed later, but hardware still requires motor control, encoder processing, calibration, device drivers, and validation.
 
 USB attachment to WSL does not by itself prove that a Docker container can access the device. Verify visibility and permissions at each layer before documenting a device path such as `/dev/ttyACM0`. Do not treat the older notes' immediate USB-to-Docker claim as a completed hardware test.
+
+### 6.4 Navigation and performance (Milestone 3 stack)
+
+Applies to `warehouse_navigation.launch` (TEB + `velocity_gate`). Gate behaviour: [`VELOCITY_GATE.md`](VELOCITY_GATE.md); parameters and
+rates: [`TUNING.md`](TUNING.md).
+
+| Symptom | Likely cause | Check or corrective action |
+|---|---|---|
+| Robot freezes and does not move (YIELD / HOLD) | The gate is holding: something is in the inner rectangle, or a crosser is tracked | `rostopic echo /velocity_gate/state` and the `[gate] ... -> hold [reason]` log line. Magenta shields = crossing, red = blocked. It releases after 0.8 s clear; after 10 s it goes to GIVEUP and TEB may reroute |
+| Robot yields to racks or walls (false crossing) | Stale `/odom`, or a long static cluster read as a mover | `rostopic hz /odom` (should be about 50 Hz); then the "false yields" recipe in `TUNING.md` §3 |
+| Robot does not yield to the Human | Human not seen by the lidar, or outside the check radius | In Unity, check the Human's layer is in the lidar's Obstacle Mask on the robot prefab and its collider crosses the scan plane; `rostopic echo -n1 /scan` shows ranges dropping where the Human is. Then `TUNING.md` §3 "yields too late" |
+| Stuck in `hold [blocked]` with a clear aisle | `/scan` older than 0.5 s counts as blind | `rostopic hz /scan` (about 10 Hz); check the Unity console for lidar errors |
+| `Control loop missed its desired rate of 10.0000Hz` in move_base | The machine cannot run TEB at 10 Hz | Launch with `perf:=laptop` (5 Hz, smaller budget) and run `scripts/perf_probe.sh`; see `TUNING.md` §5 |
+| Timers or planning look jerky; `rostopic hz /clock` is about 20 Hz | Old Unity build, or `clockHz` is low on the odometry publisher | Set `clockHz` to 100 on the robot prefab's `PlanarOdometryPublisher` and check the Fixed Timestep is 0.01 |
+| Unity warns "Maximum Allowed Timestep" or the sim runs slower than real time | Physics cannot keep 100 Hz | Close other heavy apps, lower the Unity quality settings, and use `perf:=laptop`; lower `clockHz` to 50 as a last resort |
+| `/usr/bin/env: 'python3\r': No such file or directory`, or `\r: command not found` in a shell script | CRLF line endings in a file mounted into the container | Convert only the named file (`dos2unix <file>`); keep `.py`, `.sh`, `.launch`, `.yaml` and `.urdf` files LF. In git, `git add --renormalize .` (`.gitattributes` already forces LF) |
 
 ## 7. Source documents and interpretation
 

@@ -62,8 +62,10 @@ The project focuses on back-of-house warehouse logistics for pallet/tote repleni
 
 | Topic | Type | Source | Destination | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
-| `/odom` | `nav_msgs/Odometry` | Unity | ROS (`go_to_point`, `move_base`) | Ground-truth planar odometry from `base_link` |
-| `/cmd_vel` | `geometry_msgs/Twist` | ROS | Unity | Linear and angular velocity commands |
+| `/odom` | `nav_msgs/Odometry` | Unity (50 Hz) | ROS (`move_to_point_node`, `velocity_gate`, `amcl`, `move_base`) | Ground-truth planar odometry from `drive_center` |
+| `/clock` | `rosgraph_msgs/Clock` | Unity (100 Hz) | ROS (`use_sim_time`) | Sim time; every ROS timer ticks on it |
+| `/cmd_vel_nav` | `geometry_msgs/Twist` | `move_base` (TEB) | `velocity_gate` | Planner command, before the safety filter |
+| `/cmd_vel` | `geometry_msgs/Twist` | `velocity_gate` (navigation), mission/docking scripts (direct) | Unity | Linear and angular velocity commands |
 | `/lift_cmd` | `std_msgs/Float32` | ROS | Unity | Target mast lift height ($0.25\text{ m}$) |
 | `/scan` | `sensor_msgs/LaserScan` | Unity | ROS (`costmap_2d`) | 2D LiDAR raycast point cloud for obstacle avoidance |
 | `/tf`, `/tf_static` | `tf2_msgs/TFMessage` | ROS / Unity | RViz, Planners | Coordinate transforms (`map` $\rightarrow$ `odom` $\rightarrow$ `base_link` $\rightarrow$ `laser_link`) |

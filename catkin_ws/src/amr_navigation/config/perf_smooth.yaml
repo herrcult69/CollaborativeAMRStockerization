@@ -1,0 +1,23 @@
+# perf:=smooth  (default) - 10 Hz TEB with a smaller local costmap to pay for it.
+# Loaded inside the move_base node AFTER the base configs, so keys are relative to /move_base and override them.
+# Fallback for weak machines: perf:=laptop (perf_laptop.yaml). Keep the two files' key sets identical.
+# Only input rates and the TEB budget change; velocity_gate logic and thresholds are untouched.
+
+controller_frequency: 10.0          # laptop: 5.0. Main CPU cost.
+
+local_costmap:
+  width: 5.0                        # laptop: 8.0. Without costmap_converter every occupied cell is a TEB obstacle.
+  height: 5.0
+  update_frequency: 5.0             # laptop: 3.0
+  publish_frequency: 2.0            # laptop: 1.0
+  obstacle_layer:
+    laser:                          # laptop: 3.5 / 4.0. Still > lookahead (2.0 m) + braking distance at 0.35 m/s.
+      obstacle_range: 2.5
+      raytrace_range: 3.0
+    laser_clearing:
+      obstacle_range: 2.5
+      raytrace_range: 3.0
+
+TebLocalPlannerROS:
+  costmap_obstacles_behind_robot_dist: 0.5   # laptop: 1.5 (TEB default). Drops obstacles behind the robot.
+  obstacle_poses_affected: 15                # laptop: 30 (TEB default). Fewer graph edges.

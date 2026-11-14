@@ -35,6 +35,7 @@
   <arg name="initial_pose_a" default="0.0" />
 
   <!-- Convenience flags -->
+  <arg name="perf" default="smooth" doc="smooth or laptop: navigation rate profile, see docs/TUNING.md" />
   <arg name="launch_rviz" default="false" />
   <arg name="rviz_config" default="$(find amr_navigation)/rviz/navigation.rviz" />
   <arg name="launch_mission" default="false" />
@@ -75,6 +76,7 @@
   <!-- 4. Warehouse Navigation (move_base) -->
   <include file="$(find amr_navigation)/launch/warehouse_navigation.launch">
     <arg name="robot_profile" value="$(arg robot_profile)" />
+    <arg name="perf" value="$(arg perf)" />
   </include>
 
   <!-- 5. Optional RViz -->
