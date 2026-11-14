@@ -46,11 +46,12 @@ DEFAULTS = dict(
     clear_time=0.80,          # Duration corridor must stay clear before releasing HOLD (s)
     cross_zone_w=1.50,        # Lateral half-width of crossing watch zone ahead (m)
     cross_x_max=1.50,         # Depth of crossing watch zone ahead of the nose (m), independent of d_outer
+    cross_check_dist=0.90,    # A tracked crosser only counts as threat within this distance of the nose centre (m); >= x_max + zone_w = off
     cross_v_window=0.40,      # Baseline over which a track's lateral velocity is measured (s)
     cross_v_min_span=0.25,    # Min track age before its velocity is trusted (s)
     odom_timeout=0.30,        # Measured odom older than this falls back to commanded v/w (s)
     cross_v_min=0.15,         # Min lateral closing speed to count as crossing (m/s)
-    cross_t_horizon=2.5,      # Max time-to-enter-corridor that triggers yield (s)
+    cross_t_horizon=1.8,      # Max time-to-enter-corridor that triggers yield (s)
     cross_assoc_gap=0.35,     # Max centroid jump to associate a cluster across scans (m)
     cross_confirm=3,          # Consecutive scans a crossing threat must persist
     cross_max_extent=0.80,    # Ignore clusters longer than this (walls, rack faces) (m)
@@ -290,6 +291,8 @@ class GateLogic:
             cx, cy = tr["local"]
             if turning or not (p["nose_x"] <= cx <= x_hi and abs(cy) <= p["cross_zone_w"]):
                 continue
+            if math.hypot(cx - p["nose_x"], cy) > p["cross_check_dist"]:
+                continue   # tracked (velocity warms up) but still too far to yield for
             t0, x0, y0 = tr["hist"][0]
             span = now - t0
             if span < p["cross_v_min_span"] - 1e-6:

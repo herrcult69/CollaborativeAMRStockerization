@@ -81,13 +81,17 @@ Everything is measured from the footprint nose (`nose_x` = 0.37 m). RViz draws i
 | **Inner** | rectangle `\|y\| <= inner_half_w` (0.26 = chassis 0.23 + 0.03), depth `d_inner` / `d_hold_static` (0.20) | a point inside -> **HOLD [blocked]**, `v = w = 0` |
 | **Outer** | half-ellipse centred on the nose; normalised distance `e = d_outer * sqrt((dx/d_outer)^2 + (y/outer_half_w)^2)` | `e <= d_outer`: speed scale ramps from `scale_min` (at `d_inner`) to 1.0 (at the rim). Slow only, never HOLDs. An aisle wall 0.42 m abeam costs about 15 % speed |
 | **Flank** | boxes beside the chassis, `flank_enable` (default **off**) | HOLD [flank] when enabled. Side clearance is TEB's job (footprint + `min_obstacle_dist`) |
-| **Crossing zone** | rectangle ahead, depth `cross_x_max` (own parameter, not tied to `d_outer`) | compact clusters moving laterally into the corridor -> HOLD [crossing] |
+| **Crossing zone** | rectangle ahead, depth `cross_x_max` (1.5 m, own parameter, not tied to `d_outer`), half-width `cross_zone_w` (1.5 m); threats only count within `cross_check_dist` (0.9 m) of the nose centre | compact clusters moving laterally into the corridor -> HOLD [crossing]. RViz: cyan outline + fill while watching, magenta while yielding; thin arc = check distance |
 
 **Crossing detection.** Clusters (gap 0.20 m, >= 3 points, <= 0.80 m long, not touching the FOV edge) are tracked in a
 gate-local odom frame integrated from the measured `/odom` twist (falls back to the commanded `v`/`w` if odom is older than
 `odom_timeout`). A track's lateral velocity is measured over `cross_v_window` (0.40 s, trusted after `cross_v_min_span`
 0.25 s), so a 1.5 cm centroid shift does not read as 0.15 m/s. A threat is `|vy| >= cross_v_min` inside the corridor or
-entering it within `cross_t_horizon`; it must persist `cross_confirm` scans.
+entering it within `cross_t_horizon` (1.8 s); it must persist `cross_confirm` scans. Every cluster in the zone is tracked, but
+only one within `cross_check_dist` of the nose centre can be a threat (set it >= `cross_x_max + cross_zone_w` to disable).
+
+*Known limit:* crossers wider than `cross_max_extent` (0.80 m, e.g. a wide cart) are not tracked as crossers; they fall
+back to the inner/outer shield.
 
 **Spin-first.** With a fresh Navfn plan (and more than `spin_min_remaining` of it left), a heading error to the plan point
 `shim_lookahead` ahead above `spin_enter` (60 deg) makes the gate output `v = 0, w = +/- spin_w` until the error drops
@@ -433,9 +437,9 @@ Gate parameters are set on the node as `~<name>`. Logic parameters come from `ga
 | `scale_min`, `min_crawl_speed` | 0.25, 0.10 m/s | slow-down floor at the inner depth, minimum forward speed |
 | `half_w` (`~half_width` + `~side_margin`) | 0.33 m | crossing-corridor half-width only |
 | `flank_enable`, `flank_x_min`, `flank_w` | false, -0.20, 0.35 | optional flank shield |
-| `cross_x_max`, `cross_zone_w` | 1.50, 1.50 m | crossing watch zone |
+| `cross_x_max`, `cross_zone_w`, `cross_check_dist` | 1.50, 1.50, 0.90 m | crossing watch zone and threat check radius |
 | `cross_v_window`, `cross_v_min_span`, `cross_v_min` | 0.40 s, 0.25 s, 0.15 m/s | lateral velocity baseline / threshold |
-| `cross_confirm`, `cross_t_horizon`, `cross_assoc_gap`, `cross_max_extent` | 3, 2.5 s, 0.35 m, 0.80 m | crossing confirmation and tracking |
+| `cross_confirm`, `cross_t_horizon`, `cross_assoc_gap`, `cross_max_extent` | 3, 1.8 s, 0.35 m, 0.80 m | crossing confirmation and tracking |
 | `cross_w_max` | 0.45 rad/s | skip crossing detection while turning faster (= max_vel_theta, effectively off) |
 | `odom_timeout` | 0.30 s | measured odom older than this -> commanded v/w |
 | `spin_enable`, `spin_enter`, `spin_exit`, `spin_w` | true, 1.05, 0.35 rad, 0.45 rad/s | spin-first hysteresis and speed |

@@ -400,13 +400,37 @@ class VelocityGate:
 
         # 7. Crossing watch zone outline
         zx0, zx1, zy = nose_x, nose_x + p["cross_x_max"], p["cross_zone_w"]
+        zone_hold = state == "hold" and reason == "crossing"
+        zr, zg, zb = (1.0, 0.0, 1.0) if zone_hold else (0.0, 0.9, 1.0)   # magenta while yielding, cyan watching
         m_zone = self._marker(7, Marker.LINE_STRIP, stamp, z=0.02)
-        m_zone.scale.x = 0.01
+        m_zone.scale.x = 0.04
         m_zone.points = [Point(x, y, 0.0) for x, y in ((zx0, -zy), (zx1, -zy), (zx1, zy), (zx0, zy), (zx0, -zy))]
-        self._rgba(m_zone, 0.3, 0.7, 1.0, 0.35)
+        self._rgba(m_zone, zr, zg, zb, 0.9)
+
+        # 9. Translucent fill of the same rectangle
+        m_fill = self._marker(9, Marker.CUBE, stamp, z=0.01)
+        m_fill.pose.position.x = 0.5 * (zx0 + zx1)
+        m_fill.scale.x, m_fill.scale.y, m_fill.scale.z = zx1 - zx0, 2.0 * zy, 0.005
+        self._rgba(m_fill, zr, zg, zb, 0.12)
+
+        # 10. Crossing check arc: a crosser only counts as threat inside this radius of the nose centre
+        m_arc = self._marker(10, Marker.LINE_STRIP, stamp, z=0.02)
+        rc = p["cross_check_dist"]
+        arc = []
+        for i in range(37):
+            a = math.radians(-90.0 + 5.0 * i)
+            x, y = nose_x + rc * math.cos(a), rc * math.sin(a)
+            if zx0 <= x <= zx1 and abs(y) <= zy:
+                arc.append(Point(x, y, 0.0))
+        if len(arc) >= 2:
+            m_arc.scale.x = 0.02
+            m_arc.points = arc
+            self._rgba(m_arc, zr, zg, zb, 0.9)
+        else:
+            m_arc.action = Marker.DELETE   # check disabled (radius beyond the zone) or fully clipped
 
         arr = MarkerArray()
-        arr.markers = [m_inner, m_outer, m_rim, flank[0], flank[1], m_text, m_cross, m_zone]
+        arr.markers = [m_inner, m_outer, m_rim, flank[0], flank[1], m_text, m_cross, m_zone, m_fill, m_arc]
         self.shield_pub.publish(arr)
 
 

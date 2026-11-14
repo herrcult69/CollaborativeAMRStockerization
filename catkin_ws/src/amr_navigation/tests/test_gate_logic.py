@@ -257,7 +257,7 @@ class TestCrossingYield(unittest.TestCase):
         return out
 
     def test_crossing_toward_centreline_holds(self):
-        path = [(1.2, 1.0 - 0.05 * i) for i in range(6)]
+        path = [(0.8, 0.75 - 0.05 * i) for i in range(6)]   # inside cross_check_dist (0.9 m) from the start
         res = self._run(path, v=0.35, n=5)   # 0.25 s baseline needed, then 2 confirming scans
         self.assertEqual(res[-1][0], HOLD)
         self.assertEqual(self.gate.reason, "crossing")
@@ -290,7 +290,7 @@ class TestCrossingYield(unittest.TestCase):
         self.assertFalse(self.gate.crossing)
 
     def test_releases_after_clear_time(self):
-        cross = [(1.2, 1.0 - 0.1 * i) for i in range(12)]  # 1.0 m/s sweep through to y=-0.1
+        cross = [(0.8, 0.75 - 0.1 * i) for i in range(12)]  # 1.0 m/s sweep toward the centreline
         self._run(cross[:6], v=0.0)
         self.assertEqual(self.gate.state, HOLD)
         # obstacle exits on the other side, then scene empties
@@ -309,7 +309,7 @@ class TestCrossingYield(unittest.TestCase):
         self.assertEqual(self.gate.state, FREE)
 
     def test_single_scan_jitter_ignored(self):
-        path = [(1.2, 1.0), (1.2, 1.0), (1.2, 0.7), (1.2, 1.0), (1.2, 1.0)]
+        path = [(0.8, 0.75), (0.8, 0.75), (0.8, 0.45), (0.8, 0.75), (0.8, 0.75)]
         res = self._run(path, v=0.35)
         self.assertTrue(all(r[0] == FREE for r in res))
 
@@ -347,7 +347,7 @@ class TestShieldTuning(unittest.TestCase):
         """3. Compact cluster (0.3 m) at (1.0, 1.0) moving toward centreline at 0.5 m/s, robot v=0.3, w=0 -> HOLD crossing within 0.5 s."""
         for i in range(6):
             t = i * 0.1
-            c = [(1.0, 1.0 - 0.05 * i + j * 0.05) for j in range(6)]  # ~0.25m compact extent
+            c = [(0.8, 0.75 - 0.05 * i + j * 0.05) for j in range(6)]  # ~0.25m compact extent
             self.gate.update_scan(self._pad(c), t)
             vo, wo = self.gate.step(0.3, 0.0, t)
         self.assertEqual(self.gate.state, HOLD)
@@ -360,7 +360,7 @@ class TestShieldTuning(unittest.TestCase):
         for i in range(5):
             t = i * 0.1
             # Unpadded cluster touches first and last index of scan points
-            c = [(1.0, 1.0 - 0.05 * i + j * 0.05) for j in range(6)]
+            c = [(0.8, 0.75 - 0.05 * i + j * 0.05) for j in range(6)]
             self.gate.update_scan(c, t)
             self.gate.step(0.3, 0.0, t)
         self.assertFalse(self.gate.crossing)
@@ -370,7 +370,7 @@ class TestShieldTuning(unittest.TestCase):
         # Enter crossing HOLD
         for i in range(6):
             t = i * 0.1
-            c = [(1.0, 1.0 - 0.05 * i + j * 0.05) for j in range(6)]
+            c = [(0.8, 0.75 - 0.05 * i + j * 0.05) for j in range(6)]
             self.gate.update_scan(self._pad(c), t)
             self.gate.step(0.3, 0.0, t)
         self.assertEqual(self.gate.state, HOLD)
@@ -393,6 +393,9 @@ class TestShieldTuning(unittest.TestCase):
         self.assertEqual(DEFAULTS["outer_half_w"], 0.50)
         self.assertFalse(DEFAULTS["flank_enable"])
         self.assertEqual(DEFAULTS["cross_x_max"], 1.50)
+        self.assertEqual(DEFAULTS["cross_zone_w"], 1.50)
+        self.assertEqual(DEFAULTS["cross_t_horizon"], 1.8)
+        self.assertEqual(DEFAULTS["cross_check_dist"], 0.90)
         for dead in ("omega_corridor_max", "d_stop", "d_slow"):
             self.assertNotIn(dead, DEFAULTS)
         self.assertEqual(DEFAULTS["hold_timeout"], 10.0)
@@ -725,7 +728,7 @@ class TestCrossingRobustness(unittest.TestCase):
     def test_real_crosser_detected_within_half_second(self):
         gate = GateLogic()
         for i in range(6):   # 0.5 m/s toward the centreline
-            self._scan(gate, 1.2, 1.0 - 0.05 * i, i * 0.1, vw=(0.0, 0.0))
+            self._scan(gate, 0.8, 0.75 - 0.05 * i, i * 0.1, vw=(0.0, 0.0))
             if gate.crossing:
                 break
         self.assertTrue(gate.crossing)
@@ -737,7 +740,7 @@ class TestCrossingRobustness(unittest.TestCase):
         """+/-1.5 cm centroid jitter on a static object (0.15 m/s over one scan) never reads as crossing."""
         gate = GateLogic()
         for i in range(20):
-            self._scan(gate, 1.2, 0.8 + (0.015 if i % 2 else -0.015), i * 0.1, vw=(0.0, 0.0))
+            self._scan(gate, 0.8, 0.7 + (0.015 if i % 2 else -0.015), i * 0.1, vw=(0.0, 0.0))
             self.assertFalse(gate.crossing, "scan %d" % i)
 
     def test_robot_driving_past_static_cluster_no_crossing(self):
@@ -748,14 +751,123 @@ class TestCrossingRobustness(unittest.TestCase):
 
     def test_watch_zone_depth_is_cross_x_max_not_d_outer(self):
         """Crosser 1.4 m ahead of the nose is watched with d_outer 1.0 (zone is cross_x_max 1.5)."""
-        gate = GateLogic()
+        gate = GateLogic(cross_x_max=1.5, cross_check_dist=99.0)
         for i in range(8):
             self._scan(gate, gate.p["nose_x"] + 1.4, 1.0 - 0.05 * i, i * 0.1, vw=(0.0, 0.0))
         self.assertTrue(gate.crossing)
-        gate = GateLogic(cross_x_max=1.0)
+        gate = GateLogic(cross_x_max=1.0, cross_check_dist=99.0)
         for i in range(8):
             self._scan(gate, gate.p["nose_x"] + 1.4, 1.0 - 0.05 * i, i * 0.1, vw=(0.0, 0.0))
         self.assertFalse(gate.crossing)
+
+    def test_two_crossers_opposite_sides_holds_nearest(self):
+        gate = GateLogic()
+        nose_x = gate.p["nose_x"]
+        for i in range(8):
+            t = i * 0.1
+            yA = 0.85 - 0.05 * i
+            yB = -0.70 + 0.05 * i
+            pts = [(0.0, -3.0)] + make_cluster(nose_x + 0.4, yA) + make_cluster(nose_x + 0.5, yB) + [(0.0, 3.0)]
+            gate.update_scan(pts, t)
+            gate.step(0.0, 0.0, t)
+        self.assertEqual(gate.state, HOLD)
+        self.assertEqual(gate.reason, "crossing")
+        self.assertTrue(gate.crossing)
+        self.assertIsNotNone(gate.crossing_obs)
+        self.assertAlmostEqual(gate.crossing_obs[1], -0.70 + 0.05 * 7, delta=0.05)
+
+    def test_human_leg_pair_gait_detected(self):
+        import math
+        gate = GateLogic()
+        nose_x = gate.p["nose_x"]
+        latched_t = None
+        for i in range(16):
+            t = i * 0.1
+            y_body = 0.85 - 1.0 * t
+            yL = y_body + 0.125 * math.cos(2 * math.pi * 1.0 * t)
+            yR = y_body - 0.125 * math.cos(2 * math.pi * 1.0 * t)
+            c1 = make_cluster(nose_x + 0.40, yL, n_pts=3, spacing=0.04)
+            c2 = make_cluster(nose_x + 0.40, yR, n_pts=3, spacing=0.04)
+            pts = [(0.0, -3.0)] + c1 + c2 + [(0.0, 3.0)]
+            gate.update_scan(pts, t)
+            gate.step(0.0, 0.0, t)
+            if gate.crossing:
+                if latched_t is None:
+                    latched_t = t
+            elif latched_t is not None and t <= 1.1:
+                self.fail("crossing dropped out mid-crossing at t=%.2f" % t)
+        self.assertIsNotNone(latched_t)
+        self.assertLessEqual(latched_t, 0.6 + 1e-6)
+
+    def test_static_leg_pair_no_crossing(self):
+        gate = GateLogic()
+        nose_x = gate.p["nose_x"]
+        for i in range(15):
+            t = i * 0.1
+            pts = [(0.0, -3.0)] + make_cluster(nose_x + 0.5, 0.60) + make_cluster(nose_x + 0.5, 0.85) + [(0.0, 3.0)]
+            gate.update_scan(pts, t)
+            gate.step(0.0, 0.0, t)
+            self.assertFalse(gate.crossing)
+        self.assertEqual(gate.state, FREE)
+
+    def test_wide_cart_not_tracked_by_crossing(self):
+        gate = GateLogic()
+        nose_x = gate.p["nose_x"]
+        for i in range(8):
+            t = i * 0.1
+            cart = [(nose_x + 0.5, 0.80 - 0.05 * i - 0.45 + k * 0.10) for k in range(10)]
+            pts = [(0.0, -3.0)] + cart + [(0.0, 3.0)]
+            gate.update_scan(pts, t)
+            gate.step(0.0, 0.0, t)
+            self.assertFalse(gate.crossing)
+
+    def test_crosser_far_beyond_check_dist_ignored(self):
+        gate = GateLogic()
+        nose_x = gate.p["nose_x"]
+        for i in range(8):
+            t = i * 0.1
+            pts = [(0.0, -3.0)] + make_cluster(nose_x + 1.3, 1.2 - 0.05 * i) + [(0.0, 3.0)]
+            gate.update_scan(pts, t)
+            gate.step(0.0, 0.0, t)
+            self.assertFalse(gate.crossing)
+
+    def test_crosser_beyond_check_dist_tracked_not_held(self):
+        import math
+        gate = GateLogic()
+        nose_x = gate.p["nose_x"]
+        for i in range(5):
+            t = i * 0.1
+            y = 0.80 - 0.03 * i
+            dist = math.hypot(0.6, y)
+            self.assertGreater(dist, 0.90)
+            pts = [(0.0, -3.0)] + make_cluster(nose_x + 0.6, y) + [(0.0, 3.0)]
+            gate.update_scan(pts, t)
+            gate.step(0.0, 0.0, t)
+            self.assertFalse(gate.crossing)
+            self.assertEqual(gate._cross_hits, 0)
+        for i in range(5, 8):
+            t = i * 0.1
+            y = 0.80 - 0.03 * i
+            pts = [(0.0, -3.0)] + make_cluster(nose_x + 0.6, y) + [(0.0, 3.0)]
+            gate.update_scan(pts, t)
+            gate.step(0.0, 0.0, t)
+        self.assertTrue(gate.crossing)
+        self.assertEqual(gate.state, HOLD)
+        self.assertEqual(gate.reason, "crossing")
+
+    def test_check_dist_disabled_matches_old_behaviour(self):
+        import math
+        gate = GateLogic(cross_check_dist=99.0)
+        nose_x = gate.p["nose_x"]
+        for i in range(6):
+            t = i * 0.1
+            y = 0.80 - 0.03 * i
+            dist = math.hypot(0.6, y)
+            pts = [(0.0, -3.0)] + make_cluster(nose_x + 0.6, y) + [(0.0, 3.0)]
+            gate.update_scan(pts, t)
+            gate.step(0.0, 0.0, t)
+        self.assertTrue(gate.crossing)
+        self.assertEqual(gate._cross_hits, 3)
 
 
 class TestSpinFirst(unittest.TestCase):
@@ -825,7 +937,7 @@ class TestSpinFirst(unittest.TestCase):
         gate = GateLogic(clear_time=100.0, hold_timeout=100.0)
         t = 0.0
         for i in range(6):
-            pts = [(0.0, -3.0)] + make_cluster(1.2, 1.0 - 0.05 * i) + [(0.0, 3.0)]
+            pts = [(0.0, -3.0)] + make_cluster(0.8, 0.75 - 0.05 * i) + [(0.0, 3.0)]
             gate.update_scan(pts, t, vw=(0.0, 0.0))
             gate.step(0.0, 0.0, t)
             t += 0.1
