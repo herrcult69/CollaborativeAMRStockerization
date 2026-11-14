@@ -77,6 +77,11 @@ rostopic echo -p /velocity_gate/state > "$OUTDIR/gate_state.csv" 2>/dev/null &
 PIDS+=($!)
 echo "  [+] Recording /velocity_gate/state -> gate_state.csv (PID: ${PIDS[-1]})"
 
+# 7. Gate log lines ([gate] hold reasons, spin start/stop, teb reinit) from /rosout_agg -> rosout.log (-p CSV, time in ns)
+rostopic echo -p /rosout_agg > >(grep --line-buffered -F '[gate]' > "$OUTDIR/rosout.log") 2>/dev/null &
+PIDS+=($!)
+echo "  [+] Recording [gate] lines of /rosout_agg -> rosout.log (PID: ${PIDS[-1]})"
+
 echo "=========================================================="
 echo "[record_diag] All loggers running. Now execute the test mission in Unity/ROS."
 echo "[record_diag] Waiting for Ctrl-C to finish..."

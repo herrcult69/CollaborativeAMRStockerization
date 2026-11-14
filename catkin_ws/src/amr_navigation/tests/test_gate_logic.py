@@ -11,7 +11,21 @@ _pkg_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src", 
 if os.path.isdir(_pkg_src) and _pkg_src not in sys.path:
     sys.path.insert(0, _pkg_src)
 
-from gate_logic import DEFAULTS, FREE, GIVEUP, HOLD, GateLogic, path_heading_error
+import types
+if "amr_navigation" not in sys.modules:
+    _m = types.ModuleType("amr_navigation")
+    _m.__path__ = [_pkg_src]
+    sys.modules["amr_navigation"] = _m
+import gate_logic
+sys.modules.setdefault("amr_navigation.gate_logic", gate_logic)
+
+from gate_logic import DEFAULTS, FREE, GIVEUP, HOLD, GateLogic, path_heading_error, path_remaining
+from amr_navigation.gate_logic import band_health
+
+
+def ramp(e, d_inner=0.20, d_outer=1.00, scale_min=0.25):
+    """Expected slow-down scale for a normalised outer-shield distance e (m)."""
+    return scale_min + (1.0 - scale_min) * (e - d_inner) / (d_outer - d_inner)
 
 
 def make_cluster(center_x, center_y, n_pts=3, spacing=0.03):
@@ -29,7 +43,6 @@ class TestDualShieldGateLogic(unittest.TestCase):
             d_inner=0.35,             # 0.35m inner protective stop shield
             d_outer=1.20,             # 1.20m outer warning slowdown shield
             d_hold_static=0.45,       # 0.45m in-line stationary hold threshold
-            omega_corridor_max=0.05,  # 0.05 rad/s linear heading lock clamp
             clear_time=0.80,          # 0.80s hysteresis release duration
             hold_timeout=20.0,
             min_cluster_pts=3         # Noise rejection: require >= 3 points
@@ -110,6 +123,12 @@ class TestDualShieldGateLogic(unittest.TestCase):
         # Obstacle at px = 0.10m (along chassis), py = 0.30m (flank boundary is 0.23m to 0.35m)
         flank_pts = make_cluster(0.10, 0.30, n_pts=3, spacing=0.02)
         self.gate.update_scan(flank_pts, 0.0)
+        v_out, _ = self.gate.step(0.35, 0.40, 0.0)
+        self.assertEqual(self.gate.state, FREE, "Flank shield is off by default")
+        self.assertEqual(v_out, 0.35)
+
+        self.gate = GateLogic(flank_enable=True, min_cluster_pts=3)
+        self.gate.update_scan(flank_pts, 0.0)
         v_out, w_out = self.gate.step(0.35, 0.40, 0.0)
 
         self.assertEqual(self.gate.state, HOLD, "Flank breach must trigger immediate HOLD")
@@ -159,6 +178,11 @@ class TestDualShieldGateLogic(unittest.TestCase):
         self.gate.update_scan([], 1.00)
         v_out, _ = self.gate.step(0.35, 0.0, 1.00)
         self.assertEqual(self.gate.state, FREE, "Should release to FREE after full clear_time")
+        # a HOLD longer than reinit_min_override bends TEB's band: output pauses reinit_hold for the TEB re-init
+        self.assertEqual(v_out, 0.0)
+        self.assertEqual(self.gate.reinit_count, 1)
+        self.gate.update_scan([], 1.50)
+        v_out, _ = self.gate.step(0.35, 0.0, 1.50)
         self.assertGreater(v_out, 0.0)
 
     def test_hold_timeout_giveup(self):
@@ -234,7 +258,7 @@ class TestCrossingYield(unittest.TestCase):
 
     def test_crossing_toward_centreline_holds(self):
         path = [(1.2, 1.0 - 0.05 * i) for i in range(6)]
-        res = self._run(path, v=0.35, n=3)
+        res = self._run(path, v=0.35, n=5)   # 0.25 s baseline needed, then 2 confirming scans
         self.assertEqual(res[-1][0], HOLD)
         self.assertEqual(self.gate.reason, "crossing")
         self.assertEqual(res[-1][1:], (0.0, 0.0))
@@ -267,10 +291,10 @@ class TestCrossingYield(unittest.TestCase):
 
     def test_releases_after_clear_time(self):
         cross = [(1.2, 1.0 - 0.1 * i) for i in range(12)]  # 1.0 m/s sweep through to y=-0.1
-        self._run(cross[:4], v=0.0)
+        self._run(cross[:6], v=0.0)
         self.assertEqual(self.gate.state, HOLD)
         # obstacle exits on the other side, then scene empties
-        t = 0.4
+        t = 0.6
         exit_path = [(1.2, -0.8 - 0.1 * i) for i in range(3)]
         for x, y in exit_path:
             pts = [(0.0, -3.0)] + make_cluster(x, y) + [(0.0, 3.0)]
@@ -320,8 +344,8 @@ class TestShieldTuning(unittest.TestCase):
         self.assertFalse(self.gate.crossing)
 
     def test_compact_cluster_moving_toward_centreline_holds(self):
-        """3. Compact cluster (0.3 m) at (1.0, 1.0) moving toward centreline at 0.5 m/s, robot v=0.3, w=0 -> HOLD crossing within 3 scans."""
-        for i in range(4):
+        """3. Compact cluster (0.3 m) at (1.0, 1.0) moving toward centreline at 0.5 m/s, robot v=0.3, w=0 -> HOLD crossing within 0.5 s."""
+        for i in range(6):
             t = i * 0.1
             c = [(1.0, 1.0 - 0.05 * i + j * 0.05) for j in range(6)]  # ~0.25m compact extent
             self.gate.update_scan(self._pad(c), t)
@@ -344,7 +368,7 @@ class TestShieldTuning(unittest.TestCase):
     def test_crossing_clears_tight_gap_allows_pivot(self):
         """5. Crossing HOLD, then the crossing clears with gap 0.35 m -> HOLD stays a full stop: step(0, 0.4) returns (0, 0)."""
         # Enter crossing HOLD
-        for i in range(4):
+        for i in range(6):
             t = i * 0.1
             c = [(1.0, 1.0 - 0.05 * i + j * 0.05) for j in range(6)]
             self.gate.update_scan(self._pad(c), t)
@@ -352,9 +376,9 @@ class TestShieldTuning(unittest.TestCase):
         self.assertEqual(self.gate.state, HOLD)
         self.assertEqual(self.gate.reason, "crossing")
 
-        # Crossing clears, obstacle remains in corridor at gap = 0.35m (nose_x = 0.37m -> x = 0.72m)
-        t = 0.5
-        static_obs = [(0.72, -0.05), (0.72, 0.0), (0.72, 0.05)]
+        # Crossing clears, obstacle remains in corridor at gap = 0.25m (nose_x = 0.37m -> x = 0.62m): not yet "clear"
+        t = 0.6
+        static_obs = [(0.62, -0.05), (0.62, 0.0), (0.62, 0.05)]
         self.gate.update_scan(self._pad(static_obs), t)
         vo, wo = self.gate.step(0.0, 0.4, t)
         self.assertEqual(self.gate.state, HOLD)
@@ -363,15 +387,23 @@ class TestShieldTuning(unittest.TestCase):
 
     def test_new_defaults_values(self):
         self.assertEqual(DEFAULTS["d_outer"], 1.00)
-        self.assertEqual(DEFAULTS["omega_corridor_max"], 0.10)
+        self.assertEqual(DEFAULTS["inner_half_w"], 0.26)
+        self.assertEqual(DEFAULTS["d_inner"], 0.20)
+        self.assertEqual(DEFAULTS["d_hold_static"], 0.20)
+        self.assertEqual(DEFAULTS["outer_half_w"], 0.50)
+        self.assertFalse(DEFAULTS["flank_enable"])
+        self.assertEqual(DEFAULTS["cross_x_max"], 1.50)
+        for dead in ("omega_corridor_max", "d_stop", "d_slow"):
+            self.assertNotIn(dead, DEFAULTS)
         self.assertEqual(DEFAULTS["hold_timeout"], 10.0)
         self.assertEqual(DEFAULTS["giveup_w_max"], 0.30)
         self.assertEqual(DEFAULTS["scale_min"], 0.25)
 
     def test_crawl_speed_heading_lock(self):
-        """Curvature rule: gap 0.5 (v_out ~0.175) and gap 0.35 (crawl path) preserve w / v curvature."""
+        """Curvature rule: gap 0.5 and gap 0.35 (ramp on the outer ellipse) preserve w / v curvature."""
         nose_x = self.gate.p["nose_x"]
-        for gap, exp_v in ((0.5, 0.175), (0.35, 0.35 * 0.35)):
+        for gap in (0.5, 0.35):
+            exp_v = max(0.10, 0.35 * ramp(gap))
             gate = GateLogic()
             obs = [(nose_x + gap, -0.05), (nose_x + gap, 0.0), (nose_x + gap, 0.05)]
             gate.update_scan(self._pad(obs), 0.0)
@@ -382,14 +414,14 @@ class TestShieldTuning(unittest.TestCase):
             self.assertAlmostEqual(wo, 0.65 * (vo / 0.35), places=3)
 
     def test_slowdown_scale_floor(self):
-        """Gap 0.5 -> scale 0.50; gap 0.25 -> 0 (hold)."""
+        """Gap 0.5 -> scale ramp(0.5); gap 0.15 (inside d_inner 0.20) -> 0 (hold)."""
         nose_x = self.gate.p["nose_x"]
         obs = [(nose_x + 0.5, -0.05), (nose_x + 0.5, 0.0), (nose_x + 0.5, 0.05)]
         self.gate.update_scan(self._pad(obs), 0.0)
         self.gate.step(0.35, 0.0, 0.0)
-        self.assertAlmostEqual(self.gate.scale, 0.50, places=3)
+        self.assertAlmostEqual(self.gate.scale, ramp(0.5), places=3)
         gate = GateLogic()
-        obs = [(nose_x + 0.25, -0.05), (nose_x + 0.25, 0.0), (nose_x + 0.25, 0.05)]
+        obs = [(nose_x + 0.15, -0.05), (nose_x + 0.15, 0.0), (nose_x + 0.15, 0.05)]
         gate.update_scan(self._pad(obs), 0.0)
         vo, wo = gate.step(0.35, 0.0, 0.0)
         self.assertEqual(gate.state, HOLD)
@@ -397,7 +429,7 @@ class TestShieldTuning(unittest.TestCase):
 
     def test_giveup_after_timeout_caps_w(self):
         nose_x = self.gate.p["nose_x"]
-        obs = [(nose_x + 0.28, -0.05), (nose_x + 0.28, 0.0), (nose_x + 0.28, 0.05)]
+        obs = [(nose_x + 0.15, -0.05), (nose_x + 0.15, 0.0), (nose_x + 0.15, 0.05)]
         self.gate.update_scan(self._pad(obs), 0.0)
         self.gate.step(0.35, 0.0, 0.0)
         self.assertEqual(self.gate.state, HOLD)
@@ -408,9 +440,9 @@ class TestShieldTuning(unittest.TestCase):
         self.assertLessEqual(abs(wo), 0.30 + 1e-9)
 
     def test_new_defaults_reduced_speed_and_blocked(self):
-        """6. With new defaults: obstacle at gap 0.35 -> FREE with reduced speed (not HOLD); gap 0.28 -> HOLD blocked."""
+        """6. With new defaults: obstacle at gap 0.35 -> FREE with reduced speed (not HOLD); gap 0.15 -> HOLD blocked."""
         nose_x = self.gate.p["nose_x"]
-        # gap = 0.35m: between d_hold_static (0.30m) and d_outer (0.80m) -> FREE with proportional deceleration
+        # gap = 0.35m: between d_hold_static (0.20m) and d_outer (1.00m) -> FREE with proportional deceleration
         obs_35 = [(nose_x + 0.35, -0.05), (nose_x + 0.35, 0.0), (nose_x + 0.35, 0.05)]
         self.gate.update_scan(self._pad(obs_35), 0.0)
         v35, w35 = self.gate.step(0.35, 0.0, 0.0)
@@ -418,8 +450,8 @@ class TestShieldTuning(unittest.TestCase):
         self.assertGreater(v35, 0.0)
         self.assertLess(v35, 0.35)
 
-        # gap = 0.28m: below d_hold_static (0.30m) -> HOLD [blocked]
-        obs_28 = [(nose_x + 0.28, -0.05), (nose_x + 0.28, 0.0), (nose_x + 0.28, 0.05)]
+        # gap = 0.15m: below d_hold_static (0.20m) -> HOLD [blocked]
+        obs_28 = [(nose_x + 0.15, -0.05), (nose_x + 0.15, 0.0), (nose_x + 0.15, 0.05)]
         self.gate.update_scan(self._pad(obs_28), 0.1)
         v28, w28 = self.gate.step(0.35, 0.0, 0.1)
         self.assertEqual(self.gate.state, HOLD)
@@ -507,7 +539,7 @@ class TestNavAssessment(unittest.TestCase):
         vo, wo = gate.step(0.35, 0.45, 0.0)
 
         self.assertEqual(gate.state, FREE)
-        self.assertAlmostEqual(vo, 0.175, places=3)
+        self.assertAlmostEqual(vo, 0.35 * ramp(0.5), places=3)
         self.assertAlmostEqual(wo / vo, 0.45 / 0.35, places=3)
         self.assertAlmostEqual(wo, 0.45 * (vo / 0.35), places=3)
 
@@ -540,7 +572,7 @@ class TestNavAssessment(unittest.TestCase):
         """GIVEUP with heading_err +1.0: (0, +0.30); -1.0: (0, -0.30); 0.05: (0, 0); None with TEB w 0.65: (0, 0.30)."""
         gate = GateLogic()
         nose_x = gate.p["nose_x"]
-        obs = [(nose_x + 0.28, -0.05), (nose_x + 0.28, 0.0), (nose_x + 0.28, 0.05)]
+        obs = [(nose_x + 0.15, -0.05), (nose_x + 0.15, 0.0), (nose_x + 0.15, 0.05)]
         gate.update_scan(self._pad(obs), 0.0)
         gate.step(0.35, 0.0, 0.0)
         self.assertEqual(gate.state, HOLD)
@@ -599,6 +631,403 @@ class TestNavAssessment(unittest.TestCase):
 
         # Empty plan returns None
         self.assertIsNone(path_heading_error((0.0, 0.0, 0.0), [], 0.60))
+
+
+class TestShieldGeometry(unittest.TestCase):
+    """S1: narrow inner rectangle (hard stop) + half-ellipse outer shield (slow only), flank off by default."""
+
+    def setUp(self):
+        self.gate = GateLogic()
+        self.nose = self.gate.p["nose_x"]
+
+    def _pt(self, dx, y, n=3):
+        return [(-3.0, -3.0)] + [(self.nose + dx, y + 0.03 * (i - n // 2)) for i in range(n)] + [(-3.0, 3.0)]
+
+    def test_rack_leg_beside_corridor_slows_but_does_not_hold(self):
+        """Rack leg at (nose + 0.25, 0.31) is outside the 0.26 m inner half-width: slow, no HOLD."""
+        self.gate.update_scan(self._pt(0.25, 0.31), 0.0)
+        v_out, _ = self.gate.step(0.35, 0.0, 0.0)
+        self.assertEqual(self.gate.state, FREE)
+        self.assertEqual(self.gate.gap, float("inf"))
+        self.assertGreater(v_out, 0.0)
+        self.assertLess(v_out, 0.35)
+
+    def test_obstacle_inside_inner_rectangle_holds(self):
+        self.gate.update_scan(self._pt(0.15, 0.0), 0.0)
+        self.gate.step(0.35, 0.0, 0.0)
+        self.assertEqual(self.gate.state, HOLD)
+        self.assertEqual(self.gate.reason, "blocked")
+
+    def test_inner_half_width_boundary(self):
+        """y = 0.24 is inside the inner rectangle (HOLD at dx 0.15); y = 0.30 is outside (no HOLD)."""
+        gate = GateLogic()
+        gate.update_scan(self._pt(0.15, 0.24), 0.0)
+        gate.step(0.35, 0.0, 0.0)
+        self.assertEqual(gate.state, HOLD)
+        gate = GateLogic()
+        gate.update_scan(self._pt(0.15, 0.30), 0.0)
+        gate.step(0.35, 0.0, 0.0)
+        self.assertEqual(gate.state, FREE)
+
+    def test_ellipse_scale_at_sample_points(self):
+        import math
+        for dx, y in ((0.60, 0.0), (0.40, 0.30), (0.10, 0.45)):
+            gate = GateLogic()
+            gate.update_scan(self._pt(dx, y, n=3), 0.0)
+            e = min(math.sqrt(dx ** 2 + (yy / 0.5) ** 2) for yy in (y - 0.03, y, y + 0.03))
+            gate.step(0.35, 0.0, 0.0)
+            self.assertAlmostEqual(gate.gap_outer, e, places=6)
+            self.assertAlmostEqual(gate.scale, ramp(e), places=3, msg="dx=%s y=%s" % (dx, y))
+
+    def test_aisle_walls_cost_little_speed(self):
+        """0.84 m aisle: rack faces at y = +/-0.42 along the whole aisle -> scale >= 0.8, never HOLD."""
+        wall_l = [(self.nose + 0.05 * i, 0.42) for i in range(30)]
+        wall_r = [(self.nose + 0.05 * i, -0.42) for i in range(30)]
+        self.gate.update_scan(wall_r[::-1] + wall_l, 0.0)
+        self.gate.step(0.35, 0.0, 0.0)
+        self.assertEqual(self.gate.state, FREE)
+        self.assertGreaterEqual(self.gate.scale, 0.8)
+
+    def test_outer_shield_never_holds(self):
+        """Obstacle beside the nose at the ellipse edge is slow-only."""
+        self.gate.update_scan(self._pt(0.0, 0.40), 0.0)
+        self.gate.step(0.35, 0.0, 0.0)
+        self.assertEqual(self.gate.state, FREE)
+
+    def test_flank_ignored_by_default(self):
+        self.gate.update_scan(make_cluster(0.10, 0.30, n_pts=3, spacing=0.02), 0.0)
+        self.gate.step(0.35, 0.0, 0.0)
+        self.assertEqual(self.gate.state, FREE)
+        self.assertFalse(self.gate.flank_breach)
+
+
+class TestCrossingRobustness(unittest.TestCase):
+    """S2: odom-compensated ego-motion, 0.4 s velocity baseline, own watch-zone depth."""
+
+    def _scan(self, gate, x, y, t, vw=None):
+        pts = [(0.0, -3.0)] + make_cluster(x, y) + [(0.0, 3.0)]
+        gate.update_scan(pts, t, vw=vw)
+        gate.step(0.0, 0.0, t)
+
+    def test_static_cluster_while_yawing_uses_measured_odom(self):
+        """Commanded w is 0 (stale), measured w is 0.4 rad/s: the static rack must not read as crossing."""
+        import math
+        gate = GateLogic()
+        w, dt = 0.4, 0.1
+        x, y = 1.2, 0.9
+        for i in range(10):
+            self._scan(gate, x, y, i * dt, vw=(0.0, w))
+            a = -w * dt
+            x, y = x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a)
+        self.assertFalse(gate.crossing)
+        self.assertEqual(gate.state, FREE)
+
+    def test_real_crosser_detected_within_half_second(self):
+        gate = GateLogic()
+        for i in range(6):   # 0.5 m/s toward the centreline
+            self._scan(gate, 1.2, 1.0 - 0.05 * i, i * 0.1, vw=(0.0, 0.0))
+            if gate.crossing:
+                break
+        self.assertTrue(gate.crossing)
+        self.assertLessEqual(i * 0.1, 0.5 + 1e-9)
+        self.assertEqual(gate.state, HOLD)
+        self.assertEqual(gate.reason, "crossing")
+
+    def test_centroid_jitter_ignored(self):
+        """+/-1.5 cm centroid jitter on a static object (0.15 m/s over one scan) never reads as crossing."""
+        gate = GateLogic()
+        for i in range(20):
+            self._scan(gate, 1.2, 0.8 + (0.015 if i % 2 else -0.015), i * 0.1, vw=(0.0, 0.0))
+            self.assertFalse(gate.crossing, "scan %d" % i)
+
+    def test_robot_driving_past_static_cluster_no_crossing(self):
+        gate = GateLogic()
+        for i in range(12):
+            self._scan(gate, 2.0 - 0.035 * i, 0.8, i * 0.1, vw=(0.35, 0.0))
+        self.assertFalse(gate.crossing)
+
+    def test_watch_zone_depth_is_cross_x_max_not_d_outer(self):
+        """Crosser 1.4 m ahead of the nose is watched with d_outer 1.0 (zone is cross_x_max 1.5)."""
+        gate = GateLogic()
+        for i in range(8):
+            self._scan(gate, gate.p["nose_x"] + 1.4, 1.0 - 0.05 * i, i * 0.1, vw=(0.0, 0.0))
+        self.assertTrue(gate.crossing)
+        gate = GateLogic(cross_x_max=1.0)
+        for i in range(8):
+            self._scan(gate, gate.p["nose_x"] + 1.4, 1.0 - 0.05 * i, i * 0.1, vw=(0.0, 0.0))
+        self.assertFalse(gate.crossing)
+
+
+class TestSpinFirst(unittest.TestCase):
+    """S3: rotate in place toward the plan when facing away from it."""
+
+    def test_free_spins_toward_plan_with_hysteresis(self):
+        gate = GateLogic()
+        gate.update_scan([], 0.0)
+        self.assertEqual(gate.step(0.35, 0.2, 0.0, heading_err=1.57), (0.0, 0.45))
+        self.assertTrue(gate.spinning)
+        # still above spin_exit (0.35): keeps spinning even below spin_enter
+        gate.update_scan([], 0.1)
+        self.assertEqual(gate.step(0.35, 0.2, 0.1, heading_err=0.60), (0.0, 0.45))
+        gate.update_scan([], 0.2)
+        v, w = gate.step(0.35, 0.2, 0.2, heading_err=0.30)    # below spin_exit: back to TEB
+        self.assertFalse(gate.spinning)
+        self.assertGreater(v, 0.0)
+        self.assertAlmostEqual(w, 0.2 * v / 0.35, places=3)
+        # 40 deg is below spin_enter: no re-entry
+        gate.update_scan([], 0.3)
+        v, _ = gate.step(0.35, 0.2, 0.3, heading_err=0.70)
+        self.assertFalse(gate.spinning)
+        self.assertGreater(v, 0.0)
+
+    def test_spin_direction_follows_heading_error_sign(self):
+        gate = GateLogic()
+        gate.update_scan([], 0.0)
+        self.assertEqual(gate.step(0.35, 0.3, 0.0, heading_err=-2.0), (0.0, -0.45))
+
+    def test_no_heading_error_no_spin(self):
+        gate = GateLogic()
+        gate.update_scan([], 0.0)
+        self.assertEqual(gate.step(0.35, 0.1, 0.0, heading_err=None), (0.35, 0.1))
+
+    def test_spin_disabled(self):
+        gate = GateLogic(spin_enable=False)
+        gate.update_scan([], 0.0)
+        v, _ = gate.step(0.35, 0.1, 0.0, heading_err=2.0)
+        self.assertEqual(v, 0.35)
+
+    @staticmethod
+    def _block(gate):
+        nose = gate.p["nose_x"]
+        return [(-3.0, -3.0)] + [(nose + 0.15, y) for y in (-0.05, 0.0, 0.05)] + [(-3.0, 3.0)]
+
+    def test_hold_blocked_rotates_only_after_delay(self):
+        gate = GateLogic()
+        obs = self._block(gate)
+        gate.update_scan(obs, 0.0)
+        self.assertEqual(gate.step(0.35, 0.0, 0.0, heading_err=1.5), (0.0, 0.0))
+        self.assertEqual(gate.state, HOLD)
+        gate.update_scan(obs, 1.0)
+        self.assertEqual(gate.step(0.35, 0.0, 1.0, heading_err=1.5), (0.0, 0.0))
+        gate.update_scan(obs, 2.1)
+        self.assertEqual(gate.step(0.35, 0.0, 2.1, heading_err=1.5), (0.0, 0.45))
+        self.assertEqual(gate.state, HOLD)
+
+    def test_hold_blocked_small_error_stays_frozen(self):
+        gate = GateLogic()
+        obs = self._block(gate)
+        gate.update_scan(obs, 0.0)
+        gate.step(0.35, 0.0, 0.0, heading_err=0.2)
+        gate.update_scan(obs, 3.0)
+        self.assertEqual(gate.step(0.35, 0.0, 3.0, heading_err=0.2), (0.0, 0.0))
+
+    def test_hold_crossing_never_rotates(self):
+        gate = GateLogic(clear_time=100.0, hold_timeout=100.0)
+        t = 0.0
+        for i in range(6):
+            pts = [(0.0, -3.0)] + make_cluster(1.2, 1.0 - 0.05 * i) + [(0.0, 3.0)]
+            gate.update_scan(pts, t, vw=(0.0, 0.0))
+            gate.step(0.0, 0.0, t)
+            t += 0.1
+        self.assertEqual(gate.reason, "crossing")
+        # hold is far older than spin_hold_delay and the heading error is large: still a full freeze
+        for k in range(1, 5):
+            tk = t + k
+            gate.update_scan([], tk, vw=(0.0, 0.0))
+            out = gate.step(0.0, 0.0, tk, heading_err=2.0)
+            self.assertEqual(gate.state, HOLD)
+            self.assertEqual(gate.reason, "crossing")
+            self.assertEqual(out, (0.0, 0.0))
+
+    def test_spin_min_remaining_default(self):
+        self.assertEqual(DEFAULTS["spin_min_remaining"], 0.50)
+
+    def test_path_remaining(self):
+        plan = [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.5, 0.0)]
+        self.assertAlmostEqual(path_remaining((0.0, 0.0, 0.0), plan), 1.5, places=6)
+        self.assertAlmostEqual(path_remaining((1.0, 0.1, 0.0), plan), 0.5, places=6)
+        self.assertEqual(path_remaining((0.0, 0.0, 0.0), []), 0.0)
+
+
+class TestBandHealth(unittest.TestCase):
+    """Part 3 unit tests for band_health (TEB local plan health vs global plan)."""
+
+    def setUp(self):
+        self.p = DEFAULTS
+
+    def test_on_path_band_good(self):
+        global_plan = [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.5, 0.0)]
+        local_plan = [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.5, 0.0)]
+        bad, why = band_health(local_plan, global_plan, self.p)
+        self.assertFalse(bad)
+        self.assertEqual(why, "")
+
+    def test_sideways_loop_triggers_bulge(self):
+        global_plan = [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.5, 0.0), (2.0, 0.0)]
+        local_plan = [(0.0, 0.0), (0.5, 0.70), (1.0, 0.70), (1.5, 0.0)]
+        bad, why = band_health(local_plan, global_plan, self.p)
+        self.assertTrue(bad)
+        self.assertTrue(why.startswith("bulge"))
+        self.assertIn("0.70m", why)
+
+    def test_v_cusp_triggers_cusp(self):
+        global_plan = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]
+        local_plan = [(0.0, 0.0), (0.5, 0.0), (0.3, 0.1), (0.8, 0.2)]
+        bad, why = band_health(local_plan, global_plan, self.p)
+        self.assertTrue(bad)
+        self.assertEqual(why, "cusp")
+
+    def test_detour_triggers_detour(self):
+        global_plan = [(0.0, 0.0), (0.5, 0.0), (1.5, 0.0)]
+        local_plan = [(0.0, 0.0), (0.2, 0.35), (0.3, 0.35), (0.5, 0.0)]
+        bad, why = band_health(local_plan, global_plan, self.p)
+        self.assertTrue(bad)
+        self.assertTrue(why.startswith("detour"))
+
+    def test_near_goal_good(self):
+        global_plan = [(0.0, 0.0), (0.3, 0.0)]
+        local_plan = [(0.0, 0.0), (0.1, 0.70), (0.2, 0.70), (0.3, 0.0)]
+        bad, why = band_health(local_plan, global_plan, self.p)
+        self.assertFalse(bad)
+        self.assertEqual(why, "")
+
+    def test_short_lists_good(self):
+        global_plan = [(0.0, 0.0), (1.0, 0.0)]
+        local_plan = [(0.0, 0.0), (1.0, 0.0)]
+        self.assertEqual(band_health(local_plan, global_plan, self.p), (False, ""))
+        self.assertEqual(band_health([(0.0, 0.0), (0.5, 0.0), (1.0, 0.0)], [(0.0, 0.0)], self.p), (False, ""))
+        self.assertEqual(band_health([], [], self.p), (False, ""))
+
+    def test_tiny_segments_ignored_for_cusp(self):
+        global_plan = [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.5, 0.0)]
+        local_plan = [(0.0, 0.0), (0.5, 0.0), (0.49, 0.0), (0.9, 0.0)]
+        bad, why = band_health(local_plan, global_plan, self.p)
+        self.assertFalse(bad)
+        self.assertEqual(why, "")
+
+
+class TestBandUpdate(unittest.TestCase):
+    """Part 3 unit tests for GateLogic.band_update filter and latching behavior."""
+
+    def setUp(self):
+        self.global_plan = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]
+        self.bad_local = [(0.0, 0.0), (0.5, 0.70), (1.0, 0.70), (1.5, 0.0)]
+        self.good_local = [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.5, 0.0)]
+
+    def test_one_bad_plan_no_trigger(self):
+        gate = GateLogic()
+        gate.band_update(self.bad_local, self.global_plan, now=10.0)
+        self.assertEqual(gate.reinit_count, 0)
+        self.assertFalse(gate.reinit_active(10.0))
+
+    def test_two_bad_plans_trigger(self):
+        gate = GateLogic()
+        gate.band_update(self.bad_local, self.global_plan, now=10.0)
+        gate.band_update(self.bad_local, self.global_plan, now=10.1)
+        self.assertEqual(gate.reinit_count, 1)
+        self.assertTrue(gate.reinit_active(10.1))
+        self.assertTrue(gate.reinit_reason.startswith("bulge"))
+
+    def test_good_plan_resets(self):
+        gate = GateLogic()
+        gate.band_update(self.bad_local, self.global_plan, now=10.0)
+        gate.band_update(self.good_local, self.global_plan, now=10.1)
+        gate.band_update(self.bad_local, self.global_plan, now=10.2)
+        self.assertEqual(gate.reinit_count, 0)
+        self.assertFalse(gate.reinit_active(10.2))
+
+    def test_no_trigger_during_override(self):
+        gate = GateLogic()
+        gate.state = HOLD
+        gate.band_update(self.bad_local, self.global_plan, now=10.0)
+        gate.band_update(self.bad_local, self.global_plan, now=10.1)
+        self.assertEqual(gate.reinit_count, 0)
+        self.assertFalse(gate.reinit_active(10.1))
+
+        gate2 = GateLogic()
+        gate2.spinning = True
+        gate2.band_update(self.bad_local, self.global_plan, now=10.0)
+        gate2.band_update(self.bad_local, self.global_plan, now=10.1)
+        self.assertEqual(gate2.reinit_count, 0)
+        self.assertFalse(gate2.reinit_active(10.1))
+
+    def test_no_trigger_during_cooldown(self):
+        gate = GateLogic()
+        gate._last_reinit = 10.0
+        gate.band_update(self.bad_local, self.global_plan, now=11.0)
+        gate.band_update(self.bad_local, self.global_plan, now=11.1)
+        self.assertEqual(gate.reinit_count, 0)
+        self.assertFalse(gate.reinit_active(11.1))
+
+    def test_reinit_disabled_never_triggers(self):
+        gate = GateLogic(reinit_enable=False)
+        gate.band_update(self.bad_local, self.global_plan, now=10.0)
+        gate.band_update(self.bad_local, self.global_plan, now=10.1)
+        gate.band_update(self.bad_local, self.global_plan, now=10.2)
+        self.assertEqual(gate.reinit_count, 0)
+        self.assertFalse(gate.reinit_active(10.2))
+
+
+class TestStepReinit(unittest.TestCase):
+    """Part 3 unit tests for GateLogic.step override transitions and reinit pause."""
+
+    def test_spin_end_requests_reinit_and_holds(self):
+        gate = GateLogic()
+        gate.update_scan([], 0.0)
+        gate.step(0.35, 0.0, 0.0, heading_err=0.0)
+
+        # Spin starts at t=1.0 (heading_err=1.5 > spin_enter 1.05 rad)
+        gate.update_scan([], 1.0)
+        v, w = gate.step(0.35, 0.0, 1.0, heading_err=1.5)
+        self.assertTrue(gate.spinning)
+        self.assertEqual((v, w), (0.0, 0.45))
+
+        # Spin ends at t=1.6 (duration 0.6s >= reinit_min_override 0.5s, heading_err=0.1 < spin_exit 0.35 rad)
+        gate.update_scan([], 1.6)
+        v, w = gate.step(0.35, 0.0, 1.6, heading_err=0.1)
+        self.assertFalse(gate.spinning)
+        self.assertEqual(gate.reinit_count, 1)
+        self.assertEqual(gate.reinit_reason, "override end")
+        self.assertEqual((v, w), (0.0, 0.0))
+        self.assertEqual(gate.state, FREE)
+
+        # Inside reinit_hold (0.4s hold: active until t=2.0)
+        gate.update_scan([], 1.8)
+        self.assertEqual(gate.step(0.35, 0.0, 1.8, heading_err=0.1), (0.0, 0.0))
+        self.assertEqual(gate.state, FREE)
+
+        # Released after reinit_hold expires (t=2.05)
+        gate.update_scan([], 2.05)
+        v, w = gate.step(0.35, 0.0, 2.05, heading_err=0.1)
+        self.assertAlmostEqual(v, 0.35)
+        self.assertEqual(gate.state, FREE)
+
+    def test_short_override_does_not_request_reinit(self):
+        gate = GateLogic()
+        gate.update_scan([], 0.0)
+        gate.step(0.35, 0.0, 0.0, heading_err=0.0)
+
+        # Spin starts at t=1.0
+        gate.update_scan([], 1.0)
+        gate.step(0.35, 0.0, 1.0, heading_err=1.5)
+
+        # Spin ends at t=1.3 (duration 0.3s < reinit_min_override 0.5s)
+        gate.update_scan([], 1.3)
+        v, w = gate.step(0.35, 0.0, 1.3, heading_err=0.1)
+        self.assertEqual(gate.reinit_count, 0)
+        self.assertFalse(gate.reinit_active(1.3))
+        self.assertAlmostEqual(v, 0.35)
+        self.assertEqual(gate.state, FREE)
+
+    def test_reinit_state_unchanged(self):
+        gate = GateLogic()
+        gate.update_scan([], 0.0)
+        gate.step(0.35, 0.0, 0.0, heading_err=0.0)
+        gate.update_scan([], 1.0)
+        gate.step(0.35, 0.0, 1.0, heading_err=1.5)
+        gate.update_scan([], 1.6)
+        gate.step(0.35, 0.0, 1.6, heading_err=0.1)
+        self.assertEqual(gate.state, FREE)
 
 
 if __name__ == "__main__":

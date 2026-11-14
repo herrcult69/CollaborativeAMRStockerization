@@ -4,6 +4,12 @@ Code: `catkin_ws/src/amr_navigation/scripts/velocity_gate.py` (ROS node) and
 `catkin_ws/src/amr_navigation/src/amr_navigation/gate_logic.py` (pure logic, tested by `tests/test_velocity_gate.py`).
 Companion node for costmap trails: `scripts/scan_clearing.py` (see [§8](#8-scan_clearing-companion-node)).
 
+> **Status (current design).** The live gate is the dual-shield + spin-first design described in **section 2
+> (geometry)** and **section 9 (parameters)**: narrow inner stop rectangle, half-ellipse outer slow-down, optional flank
+> shield (off), crossing yield with odom-compensated tracking, and spin-first rotation toward the plan. The predictive
+> moving-obstacle machinery in sections 1 and 3-7 (`FreeSpaceDetector`, head-on / PASS / ESCAPE plans) was retired and is
+> kept only as history. Tests: `tests/test_gate_logic.py`.
+
 ---
 
 ## 1. What it is
@@ -49,28 +55,59 @@ Important properties:
 
 ## 2. Geometry (drive_center frame, x forward, y left)
 
+Everything is measured from the footprint nose (`nose_x` = 0.37 m). RViz draws it from the same parameters
+(`publish_shields`, topic `/velocity_gate/shields`), so the drawing is the definition.
+
 ```
-                tracking area for moving obstacles (up to 5 m ahead, 3.5 m to each side)
-          ┌──────────────────────────────────────────────────────────────┐
-          │                                                              │
-   tail   │      nose                                                    │
-  -0.54 ──┼──────0.37────┬───────── corridor (|y| ≤ half_w = 0.30 m) ────┼──▶ x
-          │  [ robot ]   │◀ d_stop ▶│◀──── slow zone ────▶│              │
-          │              │  0.30 m  │  v · horizon_s       │              │
-          │              │◀──── yield_dist = 1.5 m (head-on) ─────▶│      │
-          └──────────────────────────────────────────────────────────────┘
+                          outer shield: half-ellipse centred on the nose
+                          forward semi-axis d_outer = 1.00 m, lateral semi-axis outer_half_w = 0.50 m
+   y                         .--------------------------.
+   ^                   .--'                                '--.
+ +0.50                .'                                       '.
+ +0.26 ---+-------+---+                                           \
+   |      | robot |inner (HOLD)                                    |
+   0 -----+-------+---+  depth 0.20 m                              |--> x
+   |      |       |   |                                           /
+ -0.26 ---+-------+---+                                          .'
+ -0.50                '.                                       .'
+                         '--.                              .--'
+                             '--------------------------'
+        tail -0.54       nose 0.37
+   crossing watch zone (thin outline): x in [nose, nose + 1.50 m], |y| <= 1.50 m
 ```
 
-| Name | Default | Meaning |
+| Shield | Shape | Effect |
 |---|---|---|
-| `nose_x` | 0.37 m | front edge of the footprint, ahead of drive_center |
-| `tail_x` | 0.54 m | rear edge (forks), behind drive_center |
-| `half_w` | 0.30 m | half corridor width = `~half_width` 0.23 + `~side_margin` 0.07 |
-| **gap** | — | distance from the nose to the nearest return **inside the corridor** |
-| **head-on gap** (`dyn_gap`) | — | nose → nearest head-on moving obstacle on a collision course |
+| **Inner** | rectangle `\|y\| <= inner_half_w` (0.26 = chassis 0.23 + 0.03), depth `d_inner` / `d_hold_static` (0.20) | a point inside -> **HOLD [blocked]**, `v = w = 0` |
+| **Outer** | half-ellipse centred on the nose; normalised distance `e = d_outer * sqrt((dx/d_outer)^2 + (y/outer_half_w)^2)` | `e <= d_outer`: speed scale ramps from `scale_min` (at `d_inner`) to 1.0 (at the rim). Slow only, never HOLDs. An aisle wall 0.42 m abeam costs about 15 % speed |
+| **Flank** | boxes beside the chassis, `flank_enable` (default **off**) | HOLD [flank] when enabled. Side clearance is TEB's job (footprint + `min_obstacle_dist`) |
+| **Crossing zone** | rectangle ahead, depth `cross_x_max` (own parameter, not tied to `d_outer`) | compact clusters moving laterally into the corridor -> HOLD [crossing] |
+
+**Crossing detection.** Clusters (gap 0.20 m, >= 3 points, <= 0.80 m long, not touching the FOV edge) are tracked in a
+gate-local odom frame integrated from the measured `/odom` twist (falls back to the commanded `v`/`w` if odom is older than
+`odom_timeout`). A track's lateral velocity is measured over `cross_v_window` (0.40 s, trusted after `cross_v_min_span`
+0.25 s), so a 1.5 cm centroid shift does not read as 0.15 m/s. A threat is `|vy| >= cross_v_min` inside the corridor or
+entering it within `cross_t_horizon`; it must persist `cross_confirm` scans.
+
+**Spin-first.** With a fresh Navfn plan (and more than `spin_min_remaining` of it left), a heading error to the plan point
+`shim_lookahead` ahead above `spin_enter` (60 deg) makes the gate output `v = 0, w = +/- spin_w` until the error drops
+below `spin_exit` (20 deg). In HOLD [blocked] the same rotation is allowed after `spin_hold_delay` (2 s); HOLD [crossing]
+and [flank] never rotate. Log lines: `[gate] spin start|stop (heading error N deg)`, `(spin)` in the telemetry line.
+
+**TEB band monitor.** TEB warm-starts its trajectory and does not look at the robot heading when deciding to rebuild it, so
+a band bent during a gate override (spin, HOLD, GIVEUP) stays bent afterwards (a sideways loop or V cusps). The gate
+subscribes to TEB's `local_plan`, converts it and the Navfn plan to the robot frame and calls `band_health`: bad if a local
+pose is more than `reinit_bulge` (0.50 m) from the global plan, the local plan is more than `reinit_ratio` (1.6x) longer than
+the global stretch it covers, or it has a cusp. Two bad plans in a row (`reinit_confirm`), or the end of an override that
+lasted at least `reinit_min_override` (0.5 s), request a re-init: for `reinit_hold` (0.4 s) the gate sets
+`force_reinit_new_goal_dist` to 0.0 on `/move_base/TebLocalPlannerROS` (dynamic_reconfigure; TEB then rebuilds from the Navfn
+plan every cycle) and outputs zero, then restores the old value. Detector triggers wait `reinit_cooldown` (3 s) and are
+ignored during an override and near the goal. Log lines: `[gate] teb reinit (<reason>)`, `[gate] teb reinit end`.
+`reinit_enable: false` switches it off; without the reconfigure server the gate only warns.
 
 Each scan, every valid return is converted to a point `(px, py)` in drive_center
-(`px = laser_x + r·cos a`, `py = r·sin a`). Returns of `0`, `nan`, `inf` or `≥ range_max` are dropped.
+(`px = laser_x + r*cos a`, `py = r*sin a`). Returns of `0`, `nan`, `inf` or `>= range_max` are dropped. The laser is
+220 deg, 361 rays, 10 Hz.
 
 ---
 
@@ -390,28 +427,26 @@ Gate parameters are set on the node as `~<name>`. Logic parameters come from `ga
 
 | Param | Default | Effect |
 |---|---|---|
-| `d_stop` | 0.30 m | stop distance from the nose |
-| `horizon_s` | 2.5 s | slow zone length = `v · horizon_s` |
-| `release_rate` | 0.8 /s | speed-up ramp |
+| `inner_half_w` | 0.26 m | inner shield half-width |
+| `d_inner`, `d_hold_static` | 0.20, 0.20 m | inner shield depth / HOLD distance from the nose |
+| `outer_half_w`, `d_outer` | 0.50, 1.00 m | outer half-ellipse semi-axes |
+| `scale_min`, `min_crawl_speed` | 0.25, 0.10 m/s | slow-down floor at the inner depth, minimum forward speed |
+| `half_w` (`~half_width` + `~side_margin`) | 0.33 m | crossing-corridor half-width only |
+| `flank_enable`, `flank_x_min`, `flank_w` | false, -0.20, 0.35 | optional flank shield |
+| `cross_x_max`, `cross_zone_w` | 1.50, 1.50 m | crossing watch zone |
+| `cross_v_window`, `cross_v_min_span`, `cross_v_min` | 0.40 s, 0.25 s, 0.15 m/s | lateral velocity baseline / threshold |
+| `cross_confirm`, `cross_t_horizon`, `cross_assoc_gap`, `cross_max_extent` | 3, 2.5 s, 0.35 m, 0.80 m | crossing confirmation and tracking |
+| `cross_w_max` | 0.45 rad/s | skip crossing detection while turning faster (= max_vel_theta, effectively off) |
+| `odom_timeout` | 0.30 s | measured odom older than this -> commanded v/w |
+| `spin_enable`, `spin_enter`, `spin_exit`, `spin_w` | true, 1.05, 0.35 rad, 0.45 rad/s | spin-first hysteresis and speed |
+| `spin_hold_delay`, `spin_min_remaining` | 2.0 s, 0.50 m | HOLD [blocked] rotation delay; no spin near the goal |
+| `reinit_enable`, `reinit_bulge`, `reinit_ratio`, `reinit_cusp_seg` | true, 0.50 m, 1.60, 0.03 m | TEB band monitor: bad-band tests |
+| `reinit_confirm`, `reinit_cooldown`, `reinit_hold`, `reinit_min_override` | 2, 3.0 s, 0.40 s, 0.50 s | reinit trigger and window |
+| `~teb_ns`, `~local_plan_topic` | /move_base/TebLocalPlannerROS, `<teb_ns>/local_plan` | node wiring for the band monitor |
+| `release_rate`, `clear_margin`, `clear_time` | 1.0 /s, 0.10 m, 0.80 s | speed-up ramp, release condition |
 | `scan_timeout` | 0.5 s | older scan = blind |
-| `hold_timeout` | 20 s (launch arg `gate_hold_timeout`) | HOLD → GIVEUP |
-| `clear_margin`, `clear_time` | 0.15 m, 1.0 s | release condition |
-| `yield_dist` | 1.5 m | head-on obstacle this close → HOLD |
-| `dyn_min_points`, `seg_gap` | 2, 0.25 m | moving cluster: returns needed, neighbour distance |
-| `track_ahead`, `track_side` | 5.0 m, 3.5 m | tracking area |
-| `assoc_dist` | 0.6 m | track matching distance (+ obstacle size) |
-| `vel_window`, `vel_min_span`, `min_track_speed` | 0.6 s, 0.25 s, 0.15 m/s | velocity estimate, when a track counts |
-| `lost_timeout`, `coast_timeout` | 0.5 s, 4.0 s | drop unseen tracks (in view / out of view) |
-| `pose_timeout` | 1.0 s | drop all tracks after this long without a TF pose |
-| `predict_s`, `predict_dt` | 7.0 s, 0.1 s | plan prediction |
-| `obs_pad`, `time_margin` | 0.1 m, 0.3 s | safety margin = `obs_pad + speed · time_margin` |
-| `boost_v` | 0.32 m/s | pass speed (absolute) |
-| `pass_max_w` | 0.2 rad/s | max turn rate while passing |
-| `defer_s` | 0.5 s | a side yield waits until stopping this much later is unsafe |
-| `stop_latency`, `stop_decel` | 0.3 s, 0.5 m/s² | stopping distance model |
-| `~half_width` + `~side_margin` | 0.23 + 0.07 m | corridor half width |
-| `~laser_x` | 0.33 m | laser ahead of drive_center |
-| `~moving_ref_age`, `~moving_tol` | 0.4 s, 0.12 m | moving-return sensitivity (FreeSpaceDetector) |
-| `~odom_frame` | `odom` | frame for scan comparison and tracking |
-| `~cmd_timeout` | 0.3 s | move_base considered idle after this |
+| `hold_timeout` | 10 s (launch arg `gate_hold_timeout`) | HOLD -> GIVEUP |
+| `giveup_w_max`, `shim_lookahead`, `shim_tol`, `shim_plan_age` | 0.30 rad/s, 0.60 m, 0.15 rad, 3 s | GIVEUP rotation shim |
+| `blocker_half_width`, `blocker_ttl`, `blocker_spacing` | 0.60 m, 60 s, 0.05 m | GIVEUP costmap blocker line |
+| `~laser_x`, `~base_frame`, `~cmd_timeout`, `~odom_topic`, `~plan_topic` | 0.33, drive_center, 0.5 s, /odom, Navfn plan | node wiring |
 | `scan_clearing ~densify`, `~blind_range`, `~map_margin`, `~map_frame` | 4, 4.0 m, 0.25 m, `map` | clearing scan |
