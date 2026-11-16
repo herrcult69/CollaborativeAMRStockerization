@@ -27,7 +27,7 @@
   <param name="/use_sim_time" value="true" />
 
   <arg name="robot_profile" default="xstack" doc="xstack or legacy" />
-  <arg name="map_file" default="$(eval find('amr_navigation') + '/maps/' + {'xstack': 'new_map_noobs_02', 'legacy': 'warehouse_training_01'}[arg('robot_profile')] + '.yaml')" />
+  <arg name="map_file" default="$(eval find('amr_navigation') + '/maps/' + {'xstack': 'new_map_noobs_03', 'legacy': 'warehouse_training_01'}[arg('robot_profile')] + '.yaml')" />
 
   <!-- Initial pose in milestone_3_02 map (axle ground projection at origin) -->
   <arg name="initial_pose_x" default="0.0" />
@@ -35,6 +35,7 @@
   <arg name="initial_pose_a" default="0.0" />
 
   <!-- Convenience flags -->
+  <arg name="perf" default="smooth" doc="smooth or laptop: navigation rate profile, see docs/TUNING.md" />
   <arg name="launch_rviz" default="false" />
   <arg name="rviz_config" default="$(find amr_navigation)/rviz/navigation.rviz" />
   <arg name="launch_mission" default="false" />
@@ -51,9 +52,16 @@
   <!-- 1. Unity Bridge (ROS-TCP-Endpoint) -->
   <include file="$(find amr_navigation)/launch/unity_bridge.launch" />
 
-  <!-- 2. Sensor Mount TF -->
+  <!-- 2. Robot URDF Description & State Publisher (for 3D RobotModel in RViz) -->
+  <param name="robot_description" textfile="$(eval find('amr_description') + '/urdf/' + {'xstack': 'xstack_amr', 'legacy': 'stacker_amr'}[arg('robot_profile')] + '.urdf')" />
+  <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher" />
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+
+  <!-- 2b. Sensor Mount TF (disabled when robot_state_publisher owns the kinematic tree to prevent TF duplicates) -->
   <include file="$(find amr_navigation)/launch/laser_tf.launch">
     <arg name="robot_profile" value="$(arg robot_profile)" />
+    <arg name="publish_base_mount" value="false" />
+    <arg name="publish_laser_mount" value="false" />
   </include>
 
   <!-- 3. Warehouse Localization (Map Server + AMCL) -->
@@ -68,6 +76,7 @@
   <!-- 4. Warehouse Navigation (move_base) -->
   <include file="$(find amr_navigation)/launch/warehouse_navigation.launch">
     <arg name="robot_profile" value="$(arg robot_profile)" />
+    <arg name="perf" value="$(arg perf)" />
   </include>
 
   <!-- 5. Optional RViz -->

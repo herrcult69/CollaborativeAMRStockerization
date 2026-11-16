@@ -23,3 +23,7 @@ as rows of floor-runner posts. Matches `config/locations_milestone_3.yaml` expor
 `new_map_noobs_02` (2026-10-26) replaces `_01` as the xstack default after the `NewMapnoObs` layout changed
 (racks removed from the top-right and bottom rows, small floor obstacles added). The station room is fully
 explored this time. Pair it with a `locations_milestone_3.yaml` exported from the same saved layout.
+
+`new_map_noobs_03` (2026-11-10) replaces `_02` as the clean static map for Milestone 3 navigation.
+Mapped with gmapping with obstacles removed/disabled, ensuring corridors and aisles are clean free space
+for global path planning.

@@ -1,0 +1,22 @@
+# perf:=laptop - the proven low-CPU values from before the rate work. Use on weak machines.
+# Loaded inside the move_base node AFTER the base configs, so keys are relative to /move_base and override them.
+# Keep this file's key set identical to perf_smooth.yaml.
+
+controller_frequency: 5.0
+
+local_costmap:
+  width: 8.0
+  height: 8.0
+  update_frequency: 3.0
+  publish_frequency: 1.0
+  obstacle_layer:
+    laser:
+      obstacle_range: 3.5
+      raytrace_range: 4.0
+    laser_clearing:
+      obstacle_range: 3.5
+      raytrace_range: 4.0
+
+TebLocalPlannerROS:
+  costmap_obstacles_behind_robot_dist: 1.5   # TEB default
+  obstacle_poses_affected: 30                # TEB default

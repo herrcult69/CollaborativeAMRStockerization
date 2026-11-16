@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Velocity Gate Guide</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d1d1b; --muted: #5f5e58; --line: #e3e0d8;
+  --accent: #2f5fb3; --free: #2e8b57; --hold: #c0392b; --giveup: #b7791f; --boost: #7b4fc9;
+  --code-bg: #f3f1ec; --zone-stop: #f6d5d1; --zone-slow: #fbe8c8; --zone-yield: #dfe8f7; --zone-side: #ece4f8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161614; --surface: #1f1f1c; --ink: #ecebe6; --muted: #a5a39b; --line: #34332e;
+    --accent: #7fa6ec; --free: #5cc28b; --hold: #ef7b6e; --giveup: #e2b158; --boost: #b393ef;
+    --code-bg: #26261f; --zone-stop: #5a2b27; --zone-slow: #5a4422; --zone-yield: #22314d; --zone-side: #372a4f;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161614; --surface: #1f1f1c; --ink: #ecebe6; --muted: #a5a39b; --line: #34332e;
+  --accent: #7fa6ec; --free: #5cc28b; --hold: #ef7b6e; --giveup: #e2b158; --boost: #b393ef;
+  --code-bg: #26261f; --zone-stop: #5a2b27; --zone-slow: #5a4422; --zone-yield: #22314d; --zone-side: #372a4f;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 920px; margin: 0 auto; padding: 32px 16px 80px; }
+h1 { font-size: 2rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 1.35rem; margin: 48px 0 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+h3 { font-size: 1.05rem; margin: 28px 0 8px; }
+p, li { color: var(--ink); }
+.sub { color: var(--muted); margin: 0 0 24px; }
+code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.88em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 12px 14px; border-radius: 8px; overflow-x: auto; line-height: 1.45; }
+pre code { background: none; padding: 0; }
+.table-wrap { overflow-x: auto; margin: 12px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 16px 0; }
+nav.toc { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.92rem; }
+nav.toc a { color: var(--accent); text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+.pill { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 0.82rem; font-weight: 600;
+  color: #fff; line-height: 1.6; }
+.pill.free { background: var(--free); } .pill.hold { background: var(--hold); }
+.pill.giveup { background: var(--giveup); } .pill.boost { background: var(--boost); }
+svg { width: 100%; height: auto; display: block; }
+svg text { fill: var(--ink); font-family: system-ui, sans-serif; }
+svg .muted { fill: var(--muted); }
+.log { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; white-space: nowrap; }
+.calc { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; align-items: center; }
+.calc label { font-size: 0.9rem; color: var(--muted); display: block; }
+.calc input[type=range] { width: 100%; accent-color: var(--accent); }
+.calc output { font-variant-numeric: tabular-nums; font-weight: 600; }
+.result { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; }
+.bar { grid-column: 1 / -1; height: 10px; background: var(--code-bg); border-radius: 5px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--accent); transition: width .15s; }
+.note { color: var(--muted); font-size: 0.9rem; }
+.theme-btn { float: right; background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 0.85rem; }
+@media (max-width: 560px) { .calc { grid-template-columns: 1fr; } h1 { font-size: 1.6rem; } }
+</style>
+</head>
+<body>
+<main>
+<button class="theme-btn" id="themeBtn" type="button">Theme</button>
+<h1>Velocity Gate</h1>
+<p class="sub">Algorithm and log reference for <code>scripts/velocity_gate.py</code> and
+<code>src/amr_navigation/gate_logic.py</code>, plus the companion <code>scan_clearing</code> node.</p>
+
+<nav class="toc">
+  <a href="#what">1. What it is</a><a href="#geometry">2. Geometry</a><a href="#moving">3. Moving detection</a>
+  <a href="#scan">4. Per scan</a><a href="#step">5. Decision</a><a href="#scenarios">6. Scenarios</a>
+  <a href="#logs">7. Logs</a><a href="#clearing">8. scan_clearing</a><a href="#params">9. Parameters</a>
+</nav>
+
+<h2 id="what">1. What it is</h2>
+<p>The velocity gate is a safety filter between move_base and the robot. TEB decides <em>where</em> to go. The gate
+only decides <em>how fast</em> that command may be executed, given what the lidar sees right now.</p>
+<pre><code>move_base (TEB) ──/cmd_vel_nav──▶ velocity_gate ──/cmd_vel──▶ Unity robot
+                                      ▲
+                     /scan ───────────┤   (+ TF odom ← laser_link)</code></pre>
+<div class="table-wrap"><table>
+<tr><th>Situation</th><th>Gate reaction</th></tr>
+<tr><td>Static obstacle ahead in the path</td><td>Slow in proportion to the gap, stop 0.30 m from the nose, then <span class="pill hold">HOLD</span></td></tr>
+<tr><td><strong>Head-on</strong> moving obstacle on a collision course, within 1.5 m</td><td><span class="pill hold">HOLD</span> immediately: <code>v = 0</code> and <code>w = 0</code>, whatever TEB asks</td></tr>
+<tr><td><strong>Side</strong> obstacle that keeping TEB's speed avoids</td><td>nothing, keep going</td></tr>
+<tr><td>Side obstacle that would hit us; passing at 0.32 m/s avoids it</td><td><span class="pill boost">PASS</span> at 0.32 m/s, even if TEB slowed down</td></tr>
+<tr><td>Side obstacle we can't pass; stopping lets it cross in front</td><td><span class="pill hold">HOLD</span> <code>crossing</code>, only once waiting longer would be unsafe</td></tr>
+<tr><td>Side obstacle where stopping would leave us in its path</td><td><span class="pill boost">ESCAPE</span>: pass anyway (also ends a HOLD)</td></tr>
+</table></div>
+<p><strong>The distinction:</strong> what kind of motion (head-on vs side), and for side obstacles which robot plan is predicted to be safe.
+Head-on means yield. Side means continue, then pass, then stop, in that order. Stop is chosen only when it really keeps the robot out of the path.</p>
+<ul>
+  <li>It only publishes while move_base is commanding (a <code>/cmd_vel_nav</code> message within 0.3 s), plus <strong>one zero Twist</strong> when move_base goes idle, so the robot is never left driving. Docking and lift scripts write <code>/cmd_vel</code> directly and are never gated.</li>
+  <li>The scan callback and the timer share the logic under a lock. A timer error is logged and answered with a zero Twist; the timer keeps running.</li>
+  <li>During HOLD the output is a fully zero Twist. TEB keeps planning swerves, but none of them reach the robot, so it no longer stops and weaves.</li>
+  <li>The lidar is a 180° arc 0.33 m ahead of <code>drive_center</code>. Moving obstacles that go out of view beside the robot are carried on their last velocity (coasting).</li>
+</ul>
+
+<h2 id="geometry">2. Geometry</h2>
+<p>Top-down, drive_center frame (x forward, y left), at v = 0.25 m/s. Distances are to scale along x.</p>
+<div class="card">
+<svg viewBox="0 0 860 300" role="img" aria-label="Robot footprint with stop, slow, yield and side zones ahead of the nose">
+  <!-- scale: 1 m = 200 px; drive_center at x=150 -->
+  <rect x="224" y="40" width="500" height="80" fill="var(--zone-side)" />
+  <rect x="224" y="180" width="500" height="80" fill="var(--zone-side)" />
+  <rect x="224" y="120" width="300" height="60" fill="var(--zone-yield)" />
+  <rect x="224" y="120" width="185" height="60" fill="var(--zone-slow)" />
+  <rect x="224" y="120" width="60" height="60" fill="var(--zone-stop)" />
+  <rect x="42" y="127" width="182" height="46" rx="4" fill="var(--surface)" stroke="var(--ink)" stroke-width="2" />
+  <circle cx="150" cy="150" r="4" fill="var(--ink)" />
+  <circle cx="216" cy="150" r="5" fill="var(--accent)" />
+  <line x1="224" y1="150" x2="760" y2="150" stroke="var(--muted)" stroke-dasharray="4 4" />
+  <text x="150" y="196" text-anchor="middle" font-size="12" class="muted">drive_center</text>
+  <text x="216" y="117" text-anchor="middle" font-size="12" class="muted">laser</text>
+  <text x="90" y="155" text-anchor="middle" font-size="13">robot</text>
+  <text x="42" y="222" font-size="12" class="muted">tail −0.54</text>
+  <text x="224" y="292" font-size="12" class="muted">nose 0.37</text>
+  <line x1="224" y1="270" x2="224" y2="280" stroke="var(--muted)" />
+  <text x="254" y="155" text-anchor="middle" font-size="12">stop</text>
+  <text x="346" y="155" text-anchor="middle" font-size="12">slow zone</text>
+  <text x="470" y="155" text-anchor="middle" font-size="12">yield</text>
+  <text x="600" y="155" text-anchor="middle" font-size="12" class="muted">corridor |y| ≤ 0.30</text>
+  <text x="474" y="84" text-anchor="middle" font-size="12">tracking area for moving obstacles: 5 m ahead, 3.5 m to each side</text>
+  <text x="474" y="224" text-anchor="middle" font-size="12">(not to scale sideways)</text>
+  <g font-size="11" class="muted">
+    <text x="284" y="112" text-anchor="middle">0.30</text>
+    <text x="409" y="112" text-anchor="middle">0.925</text>
+    <text x="524" y="112" text-anchor="middle">1.5</text>
+  </g>
+  <line x1="284" y1="115" x2="284" y2="185" stroke="var(--hold)" stroke-width="1.5" />
+  <line x1="409" y1="115" x2="409" y2="185" stroke="var(--giveup)" stroke-width="1.5" />
+  <line x1="524" y1="115" x2="524" y2="185" stroke="var(--accent)" stroke-width="1.5" />
+</svg>
+<p class="note">Distances above the corridor are measured from the nose. Stop = <code>d_stop</code>; the slow zone ends at
+<code>d_stop + v·horizon_s</code>; yield = <code>yield_dist</code> (head-on moving obstacles only).</p>
+</div>
+<div class="table-wrap"><table>
+<tr><th>Name</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>nose_x</code> / <code>tail_x</code></td><td>0.37 / 0.54 m</td><td>footprint front / rear edge from drive_center</td></tr>
+<tr><td><code>half_w</code></td><td>0.30 m</td><td>corridor half width = <code>~half_width</code> 0.23 + <code>~side_margin</code> 0.07</td></tr>
+<tr><td><strong>gap</strong></td><td>—</td><td>nose → nearest return inside the corridor</td></tr>
+<tr><td><strong>head-on gap</strong></td><td>—</td><td>nose → nearest head-on moving obstacle on a collision course</td></tr>
+</table></div>
+
+<h2 id="moving">3. Moving-obstacle detection: <code>FreeSpaceDetector</code></h2>
+<p>A <strong>free-space violation test</strong>: if 0.4 s ago the laser saw <em>through</em> a spot that now
+returns a hit, something moved there.</p>
+<ol>
+  <li>Keep 1.5 s of scans, each with the laser pose in <code>odom</code> at its stamp (from TF).</li>
+  <li>Pick a reference scan at least <code>moving_ref_age</code> = 0.4 s old.</li>
+  <li>For each current return: convert it to an odom point, and look at it from the reference laser pose (angle and distance ρ).</li>
+  <li>Take the smallest free distance among the reference ray at that angle and its two neighbours (<code>inf</code> = free to <code>range_max</code>).</li>
+  <li>If that free distance is greater than ρ + <code>moving_tol</code> (0.12 m), the return is flagged <strong>moving</strong>.</li>
+</ol>
+<div class="card">
+<svg viewBox="0 0 860 200" role="img" aria-label="Approaching obstacle lies in space the reference scan saw as free">
+  <circle cx="60" cy="100" r="9" fill="var(--accent)" />
+  <text x="60" y="135" text-anchor="middle" font-size="12" class="muted">laser</text>
+  <line x1="69" y1="100" x2="640" y2="100" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 5" />
+  <rect x="640" y="70" width="40" height="60" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="4 3" />
+  <text x="660" y="150" text-anchor="middle" font-size="12" class="muted">0.4 s ago</text>
+  <text x="520" y="88" text-anchor="middle" font-size="12" class="muted">reference ray: free up to here</text>
+  <rect x="440" y="70" width="40" height="60" fill="var(--hold)" opacity="0.85" />
+  <text x="460" y="150" text-anchor="middle" font-size="12">now</text>
+  <line x1="69" y1="170" x2="440" y2="170" stroke="var(--ink)" />
+  <text x="255" y="190" text-anchor="middle" font-size="12">ρ (current hit)</text>
+  <text x="740" y="96" font-size="13" font-weight="600">free &gt; ρ + 0.12</text>
+  <text x="740" y="116" font-size="13">→ moving</text>
+</svg>
+</div>
+<div class="table-wrap"><table>
+<tr><th>Case</th><th>Reference ray at that spot</th><th>Flagged?</th></tr>
+<tr><td>Static wall, robot driving or turning</td><td>hits the same spot (odom frame cancels own motion)</td><td>no</td></tr>
+<tr><td>Obstacle coming toward the robot</td><td>passed through to its old, farther position</td><td><strong>yes</strong></td></tr>
+<tr><td>Obstacle crossing the path</td><td>passed through to the wall behind</td><td><strong>yes</strong></td></tr>
+<tr><td>Obstacle moving away</td><td>spot was hidden behind it</td><td>no</td></tr>
+<tr><td>Static surface newly revealed</td><td>spot was hidden</td><td>no</td></tr>
+</table></div>
+<p>The minimum over three neighbouring rays stops points beside a static edge from being flagged. Sensitivity is
+about 0.12 m / 0.4 s ≈ 0.3 m/s. If TF <code>odom ← laser_link</code> is missing for a scan, tracks keep coasting on a dead-reckoned pose, so one
+missed lookup doesn't abandon a pass. After 1 s without a pose (<code>pose_timeout</code>) tracking is off and the gate falls back to its distance-only rules.</p>
+
+<h2 id="scan">4. Tracking moving obstacles</h2>
+<ul>
+  <li><strong>gap</strong> = min <code>(px − nose_x)</code> over corridor points (<code>|py| ≤ half_w</code>), moving or not. This drives the static rules.</li>
+  <li><strong>Clusters:</strong> consecutive returns closer than 0.25 m form a segment. A segment with ≥ 2 moving returns is a moving obstacle;
+    its <strong>visible bounding box</strong> is kept (within 5 m ahead, 3.5 m to the side).</li>
+  <li><strong>Tracks</strong> in odom, matched to the nearest predicted track (0.6 m + its size). <strong>Velocity</strong> is the <em>median</em>
+    of scan-to-scan steps over 0.6 s, so a one-off jump when another face comes into view doesn't corrupt it.</li>
+  <li>A box cut off at the edge of the lidar's view only updates the <em>sideways</em> position.</li>
+  <li><strong>Coasting:</strong> a track that should be visible but isn't seen for 0.5 s is dropped. Out of view beside or behind the laser, it
+    coasts at its last velocity for up to 4 s, so a pass isn't abandoned halfway.</li>
+  <li>Used for decisions after 0.25 s of history and ≥ 0.15 m/s. Classified by its own motion in the robot frame:
+    <code>|uy| ≥ |ux|</code> → <strong>SIDE</strong>; <code>ux &lt; 0</code> → <strong>HEAD-ON</strong>; moving away → ignored.</li>
+</ul>
+
+<h2 id="step">5. Per-command decision (20 Hz)</h2>
+<h3>5.1 Front speed target</h3>
+<pre><code>d_slow = d_stop + max(v, 0.05) · horizon_s
+target = clamp((gap − d_stop) / (d_slow − d_stop), 0, 1)</code></pre>
+<div class="card">
+  <div class="calc">
+    <div><label for="gapIn">gap (nose → nearest in corridor)</label>
+      <input id="gapIn" type="range" min="0" max="2" step="0.01" value="0.6"> <output id="gapOut"></output></div>
+    <div><label for="vIn">TEB speed v</label>
+      <input id="vIn" type="range" min="0.05" max="0.25" step="0.01" value="0.25"> <output id="vOut"></output></div>
+    <div class="result"><span>slow zone ends at <output id="dslow"></output></span>
+      <span>scale <output id="scaleOut"></output></span><span>sent <output id="sentOut"></output></span>
+      <span id="stateOut"></span></div>
+    <div class="bar"><div id="barFill"></div></div>
+  </div>
+  <p class="note">Static obstacle only. Braking applies immediately; speeding up ramps at 0.8 per second. A scan older than 0.5 s gives target 0 (forward blocked, no HOLD).</p>
+</div>
+
+<h3>5.2 Moving obstacles: predict three plans</h3>
+<div class="table-wrap"><table>
+<tr><th>Plan</th><th>Robot travel s(t), straight, over 7 s</th></tr>
+<tr><td><strong>continue</strong></td><td><code>v · t</code> (TEB's speed)</td></tr>
+<tr><td><strong>pass</strong></td><td><code>0.32 · front_target(0.32) · t</code> (no passing into a static obstacle)</td></tr>
+<tr><td><strong>stop</strong></td><td><code>min(v_now · t, b)</code>, with <code>b = 0.3·v_now + v_now²/(2·0.5)</code></td></tr>
+</table></div>
+<p>The <strong>clearance</strong> of a plan is the smallest gap between the footprint and the moving obstacle box over the horizon
+(negative = overlap depth). A plan is <strong>safe</strong> when clearance &gt; <code>0.1 m + obstacle speed · 0.3 s</code>.</p>
+<pre><code>only for tracks where "continue" is not safe:
+
+HEAD-ON:  within 1.5 m of the nose                      → HOLD "moving"
+          further away                                  → nothing yet
+
+SIDE:     0. already passing: until it is behind the fork tips
+             (or has crossed), keep PASS while clearance &gt; 0
+          1. pass safe                                       → PASS
+          2. continue 0.5 s more, then stop, still safe      → nothing yet
+          3. stop safe                                       → HOLD "crossing"
+          4. none safe: stop clearance &gt; pass clearance     → HOLD "crossing"
+                        otherwise (ties too)                 → ESCAPE</code></pre>
+<div class="card">
+<ul style="margin:0">
+  <li><strong>Pass is absolute</strong> while TEB commands forward (<code>v &gt; 0</code>): output <code>max(TEB v, 0.32)</code>, <code>|w| ≤ 0.2</code>. TEB slowing for the obstacle can't stall the robot in its path, but a zero, rotate-in-place or reverse command is never turned into a pass.</li>
+  <li><strong>Commitment is physical:</strong> once passing, it keeps going until the obstacle is behind the <em>fork tips</em> (x = −0.54) by the margin, or has crossed and moves away. It doesn't stop as soon as TEB's speed is merely predicted to be enough.</li>
+  <li><strong>Stop must be earned:</strong> a side HOLD needs a stop plan that keeps clearance; otherwise ESCAPE, which also ends a running HOLD.</li>
+  <li><strong>No premature stop:</strong> it yields only when stopping 0.5 s later would no longer be safe.</li>
+  <li><strong>Side obstacles never trigger the head-on rule</strong>, even when their edge enters the corridor during a pass.</li>
+</ul>
+</div>
+
+<h3>5.3 State machine</h3>
+<div class="card">
+<svg viewBox="0 0 860 250" role="img" aria-label="State machine FREE, HOLD, GIVEUP">
+  <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)" /></marker></defs>
+  <rect x="40" y="95" width="150" height="60" rx="30" fill="var(--free)" />
+  <text x="115" y="131" text-anchor="middle" font-size="17" font-weight="700" style="fill:#fff">FREE</text>
+  <rect x="355" y="95" width="150" height="60" rx="30" fill="var(--hold)" />
+  <text x="430" y="131" text-anchor="middle" font-size="17" font-weight="700" style="fill:#fff">HOLD</text>
+  <rect x="670" y="95" width="150" height="60" rx="30" fill="var(--giveup)" />
+  <text x="745" y="131" text-anchor="middle" font-size="17" font-weight="700" style="fill:#fff">GIVEUP</text>
+  <path d="M190 112 L355 112" stroke="var(--muted)" stroke-width="2" fill="none" marker-end="url(#arr)" />
+  <text x="272" y="60" text-anchor="middle" font-size="12">head-on ≤ 1.5 m (moving)</text>
+  <text x="272" y="76" text-anchor="middle" font-size="12">or side: stop chosen (crossing)</text>
+  <text x="272" y="92" text-anchor="middle" font-size="12">or blocked at 0.30 m</text>
+  <path d="M355 140 L190 140" stroke="var(--muted)" stroke-width="2" fill="none" marker-end="url(#arr)" />
+  <text x="272" y="172" text-anchor="middle" font-size="12">clear for 1 s, or escape</text>
+  <path d="M505 125 L670 125" stroke="var(--muted)" stroke-width="2" fill="none" marker-end="url(#arr)" />
+  <text x="587" y="112" text-anchor="middle" font-size="12">held 20 s</text>
+  <path d="M745 155 C745 235, 115 235, 115 155" stroke="var(--muted)" stroke-width="2" fill="none" marker-end="url(#arr)" />
+  <text x="430" y="228" text-anchor="middle" font-size="12">clear for 1 s</text>
+</svg>
+</div>
+<div class="table-wrap"><table>
+<tr><th>Reason</th><th>Condition</th><th>Note</th></tr>
+<tr><td><code>moving</code></td><td>head-on track on a collision course within 1.5 m</td><td>any command, including rotate-in-place</td></tr>
+<tr><td><code>crossing</code></td><td>side track, decision says stop</td><td></td></tr>
+<tr><td><code>blocked</code></td><td><code>v &gt; 0</code>, scan fresh, target ≤ 0</td><td>static; only when TEB drives forward into the stop line</td></tr>
+</table></div>
+<p><strong>Clear</strong> means all of: the scan is fresh; gap &gt; 0.45 m (<code>d_stop + clear_margin</code>); no moving-obstacle hold reason
+(while holding, "continue" itself must be safe). The 1 s timer restarts whenever any of these fails. <strong>ESCAPE</strong> leaves HOLD immediately.</p>
+<div class="table-wrap"><table>
+<tr><th>State</th><th>v_out</th><th>w_out</th></tr>
+<tr><td><span class="pill hold">HOLD</span></td><td>0</td><td><strong>0</strong></td></tr>
+<tr><td><span class="pill boost">PASS / ESCAPE</span> (v &gt; 0)</td><td>max(v, 0.32)</td><td>w clipped to ±0.2</td></tr>
+<tr><td>any, <code>v ≤ 0</code></td><td>v</td><td>w (rotate/reverse not gated)</td></tr>
+<tr><td><span class="pill giveup">GIVEUP</span></td><td>0 unless clear, then v·scale</td><td>w (TEB may rotate and reroute)</td></tr>
+<tr><td><span class="pill free">FREE</span></td><td>v·scale</td><td>w</td></tr>
+</table></div>
+<p><strong>Why GIVEUP:</strong> during a hold move_base sees no progress. After <code>gate_hold_timeout</code> (20 s) the gate
+releases rotation, so move_base's <code>nav_patience</code> (30 s) and <code>oscillation_timeout</code> (60 s) never abort the
+goal. A launch-contract test enforces this ordering.</p>
+
+<h2 id="scenarios">6. Typical scenarios</h2>
+<div class="table-wrap"><table>
+<tr><th>Scenario</th><th>What happens</th></tr>
+<tr><td>Person walks toward the robot</td><td>Head-on, collision course, ≤ 1.5 m → <code>hold [moving]</code>, completely still; released 1 s after they pass</td></tr>
+<tr><td>Person walks toward it, offset, passing beside</td><td>continue is safe → no stop</td></tr>
+<tr><td>Person walks up and stops 1 m away</td><td><code>hold [moving]</code> → not moving anymore → static: slow, <code>hold [blocked]</code> → 20 s → <code>giveup</code></td></tr>
+<tr><td>Cart crosses far ahead, or will be past in time</td><td>continue is safe → nothing</td></tr>
+<tr><td>Cart crosses where we would meet it; 0.32 m/s clears</td><td><code>side obstacle: pass at 0.32 m/s</code>, no stop</td></tr>
+<tr><td>Cart crosses close ahead, can't be passed</td><td>drives on until stopping is due, then <code>hold [crossing]</code>; it crosses in front</td></tr>
+<tr><td>Cart would hit even a stopped robot</td><td><code>side obstacle: escape ...</code>: drive through</td></tr>
+<tr><td>End of an aisle (wall)</td><td>Static: slows, turns pass; hold only if driving into 0.30 m</td></tr>
+</table></div>
+
+<h2 id="logs">7. Log reference</h2>
+<p>All lines are prefixed <code>[gate]</code>. The state is also published, latched, on
+<code>/velocity_gate/state</code> (<code>rostopic echo /velocity_gate/state</code>).</p>
+
+<h3>7.1 State change (INFO, once per change)</h3>
+<pre><code>[gate] &lt;old&gt; -&gt; &lt;new&gt;[ [reason]] (gap &lt;G&gt;m, head-on &lt;H&gt;m, tracks &lt;N&gt;)</code></pre>
+<div class="table-wrap"><table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>&lt;old&gt;</code></td><td>previous state; <code>None</code> on the first command after start</td></tr>
+<tr><td><code>[reason]</code></td><td>only on transitions into <code>hold</code>: <code>moving</code> / <code>blocked</code> / <code>crossing</code></td></tr>
+<tr><td><code>gap</code></td><td>nose → nearest corridor return; <code>infm</code> = corridor empty</td></tr>
+<tr><td><code>head-on</code></td><td>nose → nearest head-on obstacle on a collision course; <code>infm</code> = none</td></tr>
+<tr><td><code>tracks</code></td><td>moving obstacles currently tracked (including coasting ones)</td></tr>
+</table></div>
+<div class="table-wrap"><table>
+<tr><th>Log line</th><th>Meaning</th></tr>
+<tr><td class="log">[gate] None -&gt; free (gap 3.63m, head-on infm, tracks 0)</td><td>first command; 3.6 m clear</td></tr>
+<tr><td class="log">[gate] free -&gt; hold [moving] (gap 1.53m, head-on 1.50m, tracks 1)</td><td>head-on obstacle at 1.5 m → yield still</td></tr>
+<tr><td class="log">[gate] free -&gt; hold [blocked] (gap 0.29m, head-on infm, tracks 0)</td><td>static obstacle at the stop line while driving forward</td></tr>
+<tr><td class="log">[gate] free -&gt; hold [crossing] (gap infm, head-on infm, tracks 1)</td><td>side obstacle can't be passed; stopping lets it cross in front</td></tr>
+<tr><td class="log">[gate] hold -&gt; free (...)</td><td>clear for 1 s (or escape); ramping up</td></tr>
+<tr><td class="log">[gate] hold -&gt; giveup (gap 0.28m, ...)</td><td>held 20 s; rotation allowed, forward still blocked</td></tr>
+</table></div>
+<p class="note">The state persists while move_base is idle (after one zero Twist the gate goes silent, but doesn't reset). The next line
+after a pause continues from that state.</p>
+
+<h3>7.2 Slowing (INFO, max 1/s)</h3>
+<pre><code>[gate] gap &lt;G&gt;m -&gt; scale &lt;S&gt;</code></pre>
+<p>Printed while output is reduced (<code>scale &lt; 0.99</code>) and still moving forward. <code>S</code> = the fraction of TEB's speed sent.
+Not printed during HOLD, during GIVEUP with forward blocked, or with a stale scan.</p>
+<div class="table-wrap"><table>
+<tr><td class="log">[gate] gap 0.60m -&gt; scale 0.48</td><td>slow zone: half speed</td></tr>
+<tr><td class="log">[gate] gap 3.20m -&gt; scale 0.55</td><td>nothing close: this is the <strong>ramp-up</strong> after a hold (0.8 per second)</td></tr>
+</table></div>
+
+<h3>7.3 Side obstacle decision (INFO, once per change)</h3>
+<pre><code>[gate] side obstacle: pass at &lt;V&gt; m/s (TEB asked &lt;T&gt;)
+[gate] side obstacle: escape at &lt;V&gt; m/s (TEB asked &lt;T&gt;) - stopping would leave us in its path
+[gate] side obstacle: pass done (&lt;why&gt;)</code></pre>
+<div class="table-wrap"><table>
+<tr><td class="log">side obstacle: pass at 0.32 m/s (TEB asked 0.25)</td><td>continuing would collide; passing is predicted safe</td></tr>
+<tr><td class="log">side obstacle: pass at 0.32 m/s (TEB asked 0.05)</td><td>TEB slowed for it; the gate overrides so the robot doesn't stall in the path</td></tr>
+<tr><td class="log">side obstacle: escape at 0.32 m/s ...</td><td>neither passing nor stopping is safe; standing still is worse</td></tr>
+<tr><td class="log">side obstacle: pass done (forks 0.25 m past it)</td><td>obstacle behind the fork tips by the margin; back to TEB's speed</td></tr>
+<tr><td class="log">side obstacle: pass done (it has crossed)</td><td>it finished crossing and moves away</td></tr>
+<tr><td class="log">side obstacle: pass done (TEB stopped)</td><td>zero / rotate / reverse command; never overridden</td></tr>
+<tr><td class="log">side obstacle: pass done (holding)</td><td>another obstacle made it hold</td></tr>
+</table></div>
+
+<h3>7.4 Warnings</h3>
+<div class="table-wrap"><table>
+<tr><td class="log">[gate] no odom pose, moving-obstacle yield off: &lt;tf error&gt;</td>
+<td>WARN every 5 s. TF <code>odom → laser_link</code> missing at the scan stamp; tracks coast for up to 1 s, then tracking is off and only the static rules work. Check Unity odom/TF, <code>laser_tf.launch</code>, <code>/use_sim_time</code></td></tr>
+<tr><td class="log">[gate] error, publishing zero: &lt;exception&gt;</td><td>ERROR every 1 s. Something raised inside the timer step; the robot gets zero every tick while it persists. Report the exception</td></tr>
+</table></div>
+
+<h3>7.5 Silent cases</h3>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Likely cause</th></tr>
+<tr><td>Robot won't drive forward, no <code>[gate]</code> line</td><td>scan older than 0.5 s (blind). <code>rostopic hz /scan</code></td></tr>
+<tr><td>No gate output at all</td><td>move_base not publishing <code>/cmd_vel_nav</code> (idle or goal aborted)</td></tr>
+<tr><td>Weaving while state is <code>free</code></td><td>obstacle is static or slower than about 0.3 m/s (<code>tracks 0</code>), beyond 1.5 m, or passing beside. Tune <code>yield_dist</code>, <code>~moving_tol</code>, <code>~moving_ref_age</code></td></tr>
+<tr><td>Stops for a side obstacle that would have missed</td><td>margin too big for it: lower <code>obs_pad</code> / <code>time_margin</code></td></tr>
+</table></div>
+
+<h2 id="clearing">8. scan_clearing (companion node)</h2>
+<p>costmap_2d erases a cell only when a ray passes through it. That leaves trails between the 1° rays (more than one cell apart
+beyond about 3 m) and in the blind rear half. <code>/scan_clearing</code> is a 360° scan used with <code>marking: false</code>,
+so it can only erase:</p>
+<ul>
+  <li><strong>Front:</strong> 4× denser rays. Each inserted ray reaches only as far as the nearer neighbour; a <code>nan</code> neighbour means clear nothing.</li>
+  <li><strong>Rear blind arc:</strong> rays through the static <code>/map</code>, stopping 0.25 m before occupied, unknown or off-map cells, capped at 4 m. Racks stay; trails go.</li>
+</ul>
+<div class="table-wrap"><table>
+<tr><td class="log">[scan_clearing] no map pose, blind arc not cleared: …</td><td>WARN every 10 s; no AMCL <code>map → odom</code> yet. Front densification still works</td></tr>
+<tr><td class="log">[scan_clearing] rotated map origin not supported; …</td><td>map yaml has a non-zero origin yaw</td></tr>
+</table></div>
+<p class="note">Trade-off: objects not on the static map are forgotten once beside or behind the robot. If AMCL drift erases rack marks, raise <code>~map_margin</code>.</p>
+
+<h2 id="params">9. Parameters</h2>
+<div class="table-wrap"><table>
+<tr><th>Param</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>d_stop</code>, <code>horizon_s</code></td><td>0.30 m, 2.5 s</td><td>stop distance; slow zone = v·horizon_s</td></tr>
+<tr><td><code>release_rate</code></td><td>0.8 /s</td><td>speed-up ramp</td></tr>
+<tr><td><code>scan_timeout</code></td><td>0.5 s</td><td>older scan = blind</td></tr>
+<tr><td><code>hold_timeout</code></td><td>20 s (<code>gate_hold_timeout</code>)</td><td>HOLD → GIVEUP</td></tr>
+<tr><td><code>clear_margin</code>, <code>clear_time</code></td><td>0.15 m, 1.0 s</td><td>release condition</td></tr>
+<tr><td><code>yield_dist</code></td><td>1.5 m</td><td>head-on obstacle this close → HOLD</td></tr>
+<tr><td><code>dyn_min_points</code>, <code>seg_gap</code></td><td>2, 0.25 m</td><td>moving cluster</td></tr>
+<tr><td><code>track_ahead</code>, <code>track_side</code></td><td>5.0, 3.5 m</td><td>tracking area</td></tr>
+<tr><td><code>assoc_dist</code></td><td>0.6 m</td><td>track matching (+ size)</td></tr>
+<tr><td><code>vel_window</code>, <code>vel_min_span</code>, <code>min_track_speed</code></td><td>0.6 s, 0.25 s, 0.15 m/s</td><td>velocity, when a track counts</td></tr>
+<tr><td><code>lost_timeout</code>, <code>coast_timeout</code></td><td>0.5 s, 4.0 s</td><td>drop unseen tracks (in / out of view)</td></tr>
+<tr><td><code>pose_timeout</code></td><td>1.0 s</td><td>drop all tracks without a TF pose this long</td></tr>
+<tr><td><code>predict_s</code>, <code>predict_dt</code></td><td>7.0 s, 0.1 s</td><td>plan prediction</td></tr>
+<tr><td><code>obs_pad</code>, <code>time_margin</code></td><td>0.1 m, 0.3 s</td><td>safety margin</td></tr>
+<tr><td><code>boost_v</code>, <code>pass_max_w</code></td><td>0.32 m/s, 0.2 rad/s</td><td>pass speed (absolute), max turn rate while passing</td></tr>
+<tr><td><code>defer_s</code></td><td>0.5 s</td><td>side yield waits until stopping later is unsafe</td></tr>
+<tr><td><code>stop_latency</code>, <code>stop_decel</code></td><td>0.3 s, 0.5 m/s²</td><td>stopping distance model</td></tr>
+<tr><td><code>~half_width</code> + <code>~side_margin</code></td><td>0.23 + 0.07 m</td><td>corridor half width</td></tr>
+<tr><td><code>~laser_x</code></td><td>0.33 m</td><td>laser ahead of drive_center</td></tr>
+<tr><td><code>~moving_ref_age</code>, <code>~moving_tol</code></td><td>0.4 s, 0.12 m</td><td>moving-return sensitivity</td></tr>
+<tr><td><code>~odom_frame</code>, <code>~cmd_timeout</code></td><td>odom, 0.3 s</td><td>tracking frame; move_base idle timeout</td></tr>
+<tr><td>scan_clearing <code>~densify</code>, <code>~blind_range</code>, <code>~map_margin</code></td><td>4, 4.0 m, 0.25 m</td><td>clearing scan</td></tr>
+</table></div>
+</main>
+<script>
+(function () {
+  var D_STOP = 0.30, HORIZON = 2.5;
+  var gapIn = document.getElementById("gapIn"), vIn = document.getElementById("vIn");
+  function upd() {
+    var gap = +gapIn.value, v = +vIn.value;
+    var dslow = D_STOP + Math.max(v, 0.05) * HORIZON;
+    var t = Math.max(0, Math.min(1, (gap - D_STOP) / (dslow - D_STOP)));
+    document.getElementById("gapOut").textContent = gap.toFixed(2) + " m";
+    document.getElementById("vOut").textContent = v.toFixed(2) + " m/s";
+    document.getElementById("dslow").textContent = dslow.toFixed(3) + " m";
+    document.getElementById("scaleOut").textContent = t.toFixed(2);
+    document.getElementById("sentOut").textContent = (v * t).toFixed(3) + " m/s";
+    document.getElementById("barFill").style.width = (t * 100) + "%";
+    var s = document.getElementById("stateOut");
+    s.innerHTML = t <= 0 ? '<span class="pill hold">HOLD [blocked]</span>'
+      : t < 1 ? '<span class="note">log: [gate] gap ' + gap.toFixed(2) + 'm -&gt; scale ' + t.toFixed(2) + '</span>'
+      : '<span class="pill free">full speed</span>';
+  }
+  gapIn.addEventListener("input", upd); vIn.addEventListener("input", upd); upd();
+  var root = document.documentElement, btn = document.getElementById("themeBtn");
+  try { var saved = localStorage.getItem("vg-theme"); if (saved) root.setAttribute("data-theme", saved); } catch (e) {}
+  btn.addEventListener("click", function () {
+    var dark = root.getAttribute("data-theme") ? root.getAttribute("data-theme") === "dark"
+      : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var next = dark ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem("vg-theme", next); } catch (e) {}
+  });
+})();
+</script>
+</body>
+</html>

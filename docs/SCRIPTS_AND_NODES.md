@@ -439,7 +439,7 @@ STEP 6: Lower mast to 0.00m (idle/travel height)
 | `move_to_point.launch` | `move_to_point_node.py` | Single-shot navigate to any waypoint (x, y, yaw) |
 | `docking.launch` | `docking_node.py` | Single-shot raw fork insertion (no nav/lift) |
 | `warehouse_localization.launch` | `map_server`, `amcl` | Probabilistic localization with automated (0,0,0) initial pose |
-| `warehouse_navigation.launch` | `move_base` | Global/local costmaps + DWA local planner |
+| `warehouse_navigation.launch` | `move_base`, `velocity_gate.py`, `scan_clearing.py` | Costmaps + TEB planner, safety gate on `/cmd_vel_nav` -> `/cmd_vel`, costmap trail clearing. Arg `perf:=smooth\|laptop` (see `TUNING.md`) |
 | `unity_bridge.launch` | *(ros_tcp_endpoint)* | Starts the ROS↔Unity TCP bridge on port 10000 |
 
 > [!IMPORTANT] Always start `unity_bridge.launch` (or `warehouse_autonav.launch`) after pressing Play in Unity to establish the TCP loopback connection.
@@ -449,7 +449,7 @@ STEP 6: Lower mast to 0.00m (idle/travel height)
 ## 6. Unity Simulator Components
 
 ### `PlanarOdometryPublisher.cs`
-Tracks the `drive_centre` game object, computes planar position relative to spawn, converts Unity → ROS coordinates, and publishes `/odom`.
+Tracks the `drive_centre` game object, computes planar position relative to spawn, converts Unity → ROS coordinates, and publishes `/odom`, `/tf` (`publishHz`, 50 Hz) and `/clock` (`clockHz`, 100 Hz). It runs in `FixedUpdate`, so all three share one fixed sim-time source.
 
 **Coordinate mapping:**
 ```

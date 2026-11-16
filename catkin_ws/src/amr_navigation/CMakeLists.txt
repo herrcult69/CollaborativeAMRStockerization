@@ -6,6 +6,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   geometry_msgs
   sensor_msgs
+  std_srvs
   nav_msgs
   tf2_ros
   move_base
@@ -22,6 +23,7 @@ catkin_package(
     std_msgs
     geometry_msgs
     sensor_msgs
+    std_srvs
     nav_msgs
     tf2_ros
     move_base
@@ -54,4 +56,6 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(tests/test_docking.py)
   catkin_add_nosetests(tests/test_pallet_detect.py)
   catkin_add_nosetests(tests/test_locations.py)
+  catkin_add_nosetests(tests/test_gate_logic.py)
+  catkin_add_nosetests(tests/test_unification_params.py)
 endif()

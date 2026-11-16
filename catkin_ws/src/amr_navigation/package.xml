@@ -12,17 +12,20 @@
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>nav_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>move_base</depend>
   <depend>costmap_2d</depend>
   <depend>dwa_local_planner</depend>
   <depend>teb_local_planner</depend>
+  <depend>costmap_converter</depend>
   <exec_depend>gmapping</exec_depend>
   <exec_depend>map_server</exec_depend>
   <exec_depend>amcl</exec_depend>
   <exec_depend>navfn</exec_depend>
   <exec_depend>actionlib</exec_depend>
+  <exec_depend>dynamic_reconfigure</exec_depend>
   <exec_depend>move_base_msgs</exec_depend>
 
   <export>

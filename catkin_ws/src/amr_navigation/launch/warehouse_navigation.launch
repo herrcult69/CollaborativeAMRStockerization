@@ -8,6 +8,13 @@
        Allow slow heading alignment: pi / 0.08 rad/s is about 39 seconds.
        This is still a finite timeout, not a remedy for actual left/right wobble. -->
   <arg name="oscillation_timeout" default="60.0" />
+  <!-- velocity_gate holds the robot completely still while yielding. move_base sees no progress during that
+       time, so every move_base timeout must outlast the gate's hold: gate_hold_timeout < oscillation_timeout and
+       < controller/planner patience. After the hold the gate stops holding (TEB may rotate/reroute). -->
+  <arg name="gate_hold_timeout" default="10.0" />
+  <arg name="nav_patience" default="30.0" doc="controller_patience and planner_patience; keep > gate_hold_timeout" />
+  <!-- smooth: 10 Hz TEB + 5x5 m local costmap. laptop: the earlier low-CPU values (5 Hz, 8x8 m). See docs/TUNING.md. -->
+  <arg name="perf" default="smooth" doc="smooth or laptop" />
   <node pkg="move_base" type="move_base" name="move_base" output="screen">
     <rosparam command="load" file="$(find amr_navigation)/config/costmap_common.yaml" ns="global_costmap" />
     <rosparam command="load" file="$(find amr_navigation)/config/robot_$(arg robot_profile).yaml" ns="global_costmap" />
@@ -15,23 +22,41 @@
     <rosparam command="load" file="$(find amr_navigation)/config/costmap_common.yaml" ns="local_costmap" />
     <rosparam command="load" file="$(find amr_navigation)/config/robot_$(arg robot_profile).yaml" ns="local_costmap" />
     <rosparam command="load" file="$(find amr_navigation)/config/local_costmap.yaml" ns="local_costmap" />
-    <rosparam command="load" file="$(find amr_navigation)/config/dwa_warehouse.yaml" ns="DWAPlannerROS" />
-    <param name="base_global_planner" value="navfn/NavfnROS" />
-    <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" />
-    <param name="NavfnROS/allow_unknown" value="false" />
-    <param name="controller_frequency" value="10.0" />
+    <!-- <rosparam command="load" file="$(find amr_navigation)/config/dwa_warehouse.yaml" ns="DWAPlannerROS" /> -->
     
+    <param name="base_local_planner" value="teb_local_planner/TebLocalPlannerROS" />
+    <rosparam command="load" file="$(find amr_navigation)/config/teb_warehouse.yaml" ns="TebLocalPlannerROS" />
+    <!-- Perf profile: loaded after every base config on purpose so it overrides them. Sets controller_frequency too. -->
+    <rosparam command="load" file="$(find amr_navigation)/config/perf_$(arg perf).yaml" />
+
+    <param name="base_global_planner" value="navfn/NavfnROS" />
+    <!-- <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" /> -->
+    <param name="NavfnROS/allow_unknown" value="false" />
+    <!-- controller_frequency comes from config/perf_$(arg perf).yaml -->
+
     <!-- NavFn redraw the route 1/ sec -->
     <param name="planner_frequency" value="1.0" /> 
     
-    <param name="planner_patience" value="5.0" />
-    <param name="controller_patience" value="5.0" />
+    <param name="planner_patience" value="$(arg nav_patience)" />
+    <param name="controller_patience" value="$(arg nav_patience)" />
     <param name="oscillation_timeout" value="$(arg oscillation_timeout)" />
     <param name="oscillation_distance" value="0.10" />
     <param name="shutdown_costmaps" value="false" />
     <!-- Introduce recovery separately after basic goal following is validated. -->
     <param name="recovery_behavior_enabled" value="false" />
     <param name="clearing_rotation_allowed" value="false" />
-    <remap from="cmd_vel" to="/cmd_vel" />
+    <!-- <remap from="cmd_vel" to="/cmd_vel"/> -->
+    <remap from="cmd_vel" to="/cmd_vel_nav"/>
+  </node>
+  <!-- Optional URDF robot_description parameter for RViz if standalone -->
+  <param unless="$(eval optenv('robot_description') != '')" name="robot_description"
+         textfile="$(eval find('amr_description') + '/urdf/' + {'xstack': 'xstack_amr', 'legacy': 'stacker_amr'}[arg('robot_profile')] + '.urdf')" />
+
+  <!-- Clearing-only scan for the costmaps (laser_clearing source in costmap_common.yaml): removes the trails
+       dynamic obstacles leave between lidar rays and in the blind rear arc. -->
+  <node pkg="amr_navigation" type="scan_clearing.py" name="scan_clearing" output="screen" />
+  <node pkg="amr_navigation" type="velocity_gate.py" name="velocity_gate" output="screen">
+    <param name="hold_timeout" value="$(arg gate_hold_timeout)" />
+    <param name="base_frame" value="$(arg base_frame)" />
   </node>
 </launch>

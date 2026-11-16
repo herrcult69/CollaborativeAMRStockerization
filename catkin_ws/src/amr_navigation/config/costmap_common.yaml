@@ -1,7 +1,7 @@
 # Shared costmap settings. Load robot_<profile>.yaml afterward.
 transform_tolerance: 0.3
 resolution: 0.05
-always_send_full_costmap: true
+always_send_full_costmap: false
 
 static_layer:
 # Copy the walls/ racks from the saved /map
@@ -11,7 +11,7 @@ static_layer:
 
 obstacle_layer: 
 # Use /scan during RUNNING TIME
-  observation_sources: laser
+  observation_sources: laser laser_clearing
   combination_method: 1
   laser:
     topic: /scan
@@ -19,15 +19,29 @@ obstacle_layer:
     marking: true
     clearing: true
     inf_is_valid: true
-    # Positive infinity is converted near 10 m for clearing. Do not mark it.
-    obstacle_range: 9.0
-    raytrace_range: 10.0
+    # Raytracing reduced from 10.0m to 4.0m to eliminate 1.7s costmap lag
+    obstacle_range: 3.5
+    raytrace_range: 4.0
     min_obstacle_height: 0.05
     max_obstacle_height: 2.0
     observation_persistence: 0.0
     expected_update_rate: 0.5
+  laser_clearing:
+  # scripts/scan_clearing.py: extra rays between the 1 deg lidar rays + map-free rays through the blind rear arc.
+  # Erases the trails moving obstacles leave behind; clearing only, so it never adds an obstacle.
+    topic: /scan_clearing
+    data_type: LaserScan
+    marking: false
+    clearing: true
+    inf_is_valid: true
+    obstacle_range: 3.5
+    raytrace_range: 4.0
+    min_obstacle_height: 0.05
+    max_obstacle_height: 2.0
+    observation_persistence: 0.0
+    expected_update_rate: 0.0   # optional source: navigation keeps running if the node is down
 
 inflation_layer: # Make the area surrounding the obstacles BIGGER 
 # Affect the Costplan => make the robot prefer the middle path instead of near the racks
-  inflation_radius: 0.65
-  cost_scaling_factor: 3.0
+  inflation_radius: 0.45
+  cost_scaling_factor: 5.0

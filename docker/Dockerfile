@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-osrf-pycommon \
     ros-noetic-navigation \
     ros-noetic-teb-local-planner \
+    ros-noetic-costmap-converter \
     ros-noetic-dwa-local-planner \
     ros-noetic-gmapping \
     ros-noetic-map-server \
