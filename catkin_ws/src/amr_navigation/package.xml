@@ -27,6 +27,7 @@
   <exec_depend>actionlib</exec_depend>
   <exec_depend>dynamic_reconfigure</exec_depend>
   <exec_depend>move_base_msgs</exec_depend>
+  <exec_depend>rosserial_python</exec_depend>
 
   <export>
   </export>

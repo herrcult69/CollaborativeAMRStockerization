@@ -1,0 +1,15 @@
+<launch>
+  <!-- Physical XStack base: bridges the motor/lift microcontroller over rosserial.
+       The firmware (firmware/xstack_base) subscribes /cmd_vel and /lift_cmd and
+       publishes /odom plus the odom -> drive_center TF, replacing unity_bridge.launch.
+       Do not run together with unity_bridge.launch (both would own /odom). -->
+  <arg name="port" default="/dev/ttyUSB0" />
+  <arg name="baud" default="115200" />
+  <node pkg="rosserial_python" type="serial_node.py" name="xstack_base_serial" output="screen" respawn="true">
+    <param name="port" value="$(arg port)" />
+    <param name="baud" value="$(arg baud)" />
+  </node>
+  <include file="$(find amr_navigation)/launch/laser_tf.launch">
+    <arg name="robot_profile" value="xstack" />
+  </include>
+</launch>
